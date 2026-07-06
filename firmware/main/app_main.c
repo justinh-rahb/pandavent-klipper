@@ -21,8 +21,9 @@ static pv_motor_target_t flip(pv_motor_target_t t)
 
 static void reflect_mode_on_led(void)
 {
+    // Match stock: LED off in AUTO, blinking in MANUAL.
     pv_status_led_set(pv_policy_get_mode() == PV_POLICY_MODE_AUTO
-                          ? PV_STATUS_LED_SOLID
+                          ? PV_STATUS_LED_OFF
                           : PV_STATUS_LED_BLINK);
 }
 

@@ -16,7 +16,7 @@
 #define PV_PIN_BOOT_BUTTON      GPIO_NUM_0
 
 // User button LED — separate from the switch. Active-high output. Stock uses
-// steady = auto mode, blink = manual mode.
+// off = auto mode, blink = manual mode (per FUN_400dec04 in the stock binary).
 #define PV_PIN_USER_BUTTON_LED  GPIO_NUM_27
 
 // Hardware-config auto-detect. Single ADC line whose raw value picks between

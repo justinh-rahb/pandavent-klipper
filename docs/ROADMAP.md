@@ -27,6 +27,7 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
 - [x] Web page to enter SSID + password
 - [x] Store WiFi credentials in NVS (`app_nvs` namespace, stock-compatible)
 - [x] Auto-reconnect to saved WiFi on boot
+- [x] Advertise `PandaVent.local` over mDNS
 
 ### Moonraker Configuration
 - [x] Web page: enter Moonraker IP/hostname and port
@@ -39,7 +40,7 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
 - [x] Motor driver: LEDC PWM forward/reverse with soft-start (`pv_motor`)
 - [x] Hall sensor reading for vent position feedback (5-state classifier)
 - [x] Button handler: debounce, single-click, long-press (`pv_button`)
-- [x] Status LED on user button (`pv_status_led`; GPIO 27, solid = auto, blink = manual)
+- [x] Status LED on user button (`pv_status_led`; GPIO 27, off = auto, blink = manual)
 - [x] Read hardware-config ADC on GPIO 35 to pick 0/2/4 active motor groups
 
 ### Remaining Core Verification
@@ -55,28 +56,27 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
 To match the stock BTT firmware capabilities, the following features must be implemented in the Web UI and backend:
 
 ### Wi-Fi Page Parity
-- [ ] Network Scanner: Scan for visible Wi-Fi networks and display as a selectable list (currently requires manual entry)
+- [x] Network Scanner: Scan for visible Wi-Fi networks and display as a selectable list (`pv_wifi_scan_start` + portal `<select>` dropdown)
 - [ ] Connection Status: Display IP address and clear connection status/troubleshooting prompts
 
 ### AP Page Parity
-- [ ] Configurable AP Hotspot: Allow user to change AP SSID, Password, and IP subnet
+- [x] Configurable AP Hotspot: Allow user to change AP SSID, Password, and IP subnet (`pv_wifi_ap_config_t` + portal `/ap_config`)
 - [ ] AP Toggle: Allow disabling the AP hotspot entirely to save resources
-- [ ] Apply & Reboot: Require and handle device reboot to apply AP changes
+- [x] Apply & Reboot: Require and handle device reboot to apply AP changes (`pv_wifi_set_ap_config_and_reboot`)
 
 ### Printer (Moonraker) Page Parity
 - [ ] Printer Discovery: Implement mDNS discovery for `_moonraker._tcp` to populate a selectable list of printers on the LAN, eliminating manual IP entry
 
 ### Settings Page Parity
 - [ ] OTA Updates: Implement `.bin` upload via Web UI and OTA flashing process
-- [ ] Factory Reset: Add Web UI button for clearing NVS and rebooting
+- [ ] Factory Reset: Add Web UI button for clearing NVS and rebooting (physical BOOT-button reset already implemented in `pv_button`)
 - [ ] Firmware Version: Display current version
 - [ ] Language Toggle: Support for English and Simplified Chinese (optional, but needed for 1:1 parity)
-- [ ] Hardware Reset: Implement BOOT button (GPIO 0) 6-second long-press to factory reset
 
 ### Vent Button Parity (Minor Adjustments)
-- [ ] Ensure single-click in AUTO mode immediately switches to MANUAL and reverses vent state (already mostly implemented)
-- [ ] Adjust button timings to match stock: 6-second long-press for mode switch (instead of generic long-press)
-- [ ] Status LED matches stock: OFF during AUTO, blinking (0.5s) during MANUAL
+- [x] Single-click in AUTO immediately switches to MANUAL and reverses vent state (`app_main:on_button`)
+- [x] Long-press mode switch (3 s, per stock binary `DAT_400d0948 = 2999 × 10 ms` and BTT user manual)
+- [x] Status LED matches stock: OFF during AUTO, blinking during MANUAL (`app_main:reflect_mode_on_led`)
 
 ## Phase 3 — Firmware Parity (RGB Lighting & Themes)
 

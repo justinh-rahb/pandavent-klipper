@@ -1,8 +1,9 @@
 #pragma once
 
 // User-button LED (GPIO 27, active-high). Matches stock firmware's mode
-// indicator: solid on when the vent is running in auto mode, blinking when
-// in manual mode, off when disabled.
+// indicator: off in auto mode, blinking in manual mode. The SOLID mode is
+// exposed for future callers (e.g. a "device is on / captive portal up"
+// hint) but the vent policy itself only uses OFF and BLINK.
 
 #include "esp_err.h"
 
