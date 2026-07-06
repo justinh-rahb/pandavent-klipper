@@ -11,7 +11,18 @@ Evidence from binary strings:
 - HAL paths: `hal/esp32/include/hal/gpio_ll.h`, `hal/esp32/include/hal/adc_ll.h`
 - Toolchain: `xtensa-esp-elf` (not `riscv32-esp-elf`)
 - Port code: `port/esp32/rtc_time.c`, `port/soc/esp32/clk.c`
-- Built with **ESP-IDF** (not Arduino)
+- Built with **ESP-IDF** v5.3.1 (not Arduino), project name `panda_vent`, compiled 2026-05-27
+
+Firmware image segment layout (from `esptool image-info`):
+
+| Segment | Load addr | Length | Region |
+|---------|-----------|--------|--------|
+| 0 | 0x3f400020 | 0x3a3c8 | DROM (rodata/strings) |
+| 1 | 0x3ff80000 | 0x00004 | RTC DRAM |
+| 2 | 0x3ffb0000 | 0x04394 | DRAM (initialized data) |
+| 3 | 0x40080000 | 0x01880 | IRAM (vector table etc.) |
+| 4 | 0x400d0020 | 0xc0304 | IROM (main code) |
+| 5 | 0x40081880 | 0x16e18 | IRAM (main code) |
 
 ## GPIO Pin Map
 
@@ -22,18 +33,27 @@ Evidence from binary strings:
 | **User Button (with LED)** | GPIO 12 | GPIO input + LED output | BTT User Manual |
 | **BOOT Button** | GPIO 0 | GPIO input (factory reset) | BTT User Manual |
 
-### Confirmed (from firmware binary strings)
+### Confirmed (from Ghidra disassembly — see `analysis/`)
 
-| Function | GPIO / Channel | Peripheral | Evidence |
-|----------|----------------|-----------|----------|
-| **LED Strip Detection** | ADC1_CHANNEL_7 (GPIO 35) | ADC oneshot | `adc_oneshot_config_channel(hall_adc_handle, ADC1_CHANNEL_7, &chan_config)` |
-| **Hall Sensor Group 1** | GROUP1_ADC_CHANNEL | ADC oneshot | `adc_oneshot_config_channel(hall_adc_handle, GROUP1_ADC_CHANNEL, &chan_config)` |
-| **Hall Sensor Group 2** | GROUP2_ADC_CHANNEL | ADC oneshot | `adc_oneshot_config_channel(hall_adc_handle, GROUP2_ADC_CHANNEL, &chan_config)` |
-| **Hall Sensor Group 3** | GROUP3_ADC_CHANNEL | ADC oneshot | `adc_oneshot_config_channel(hall_adc_handle, GROUP3_ADC_CHANNEL, &chan_config)` |
-| **Hall Sensor Group 4** | GROUP4_ADC_CHANNEL | ADC oneshot | `adc_oneshot_config_channel(hall_adc_handle, GROUP4_ADC_CHANNEL, &chan_config)` |
-| **Motor Forward PWM** | Unknown GPIO | LEDC channel | `ledc_channel_config(&fwd_chan)` |
-| **Motor Reverse PWM** | Unknown GPIO | LEDC channel | `ledc_channel_config(&rev_chan)` |
-| **WS2812 RGB Strip(s)** | Unknown GPIO(s) | RMT TX | `rmt_new_tx_channel`, `rgb_channels[i]` (multi-channel array) |
+The firmware defines **4 independent motor groups**, each with its own hall
+sensor + forward/reverse LEDC PWM pair. Config lives in a `motor_channel_t[4]`
+array in DRAM whose per-group struct we dumped from memory:
+
+| Group | Hall ADC ch → GPIO | Fwd LEDC ch → GPIO | Rev LEDC ch → GPIO |
+|-------|--------------------|--------------------|--------------------|
+| **0** | ADC1_CH2 → GPIO 38 | LEDC ch 4 → GPIO 22 | LEDC ch 5 → GPIO 21 |
+| **1** | ADC1_CH0 → GPIO 36 | LEDC ch 0 → GPIO 25 | LEDC ch 1 → GPIO 26 |
+| **2** | ADC1_CH1 → GPIO 37 | LEDC ch 2 → GPIO 32 | LEDC ch 3 → GPIO 33 |
+| **3** | ADC1_CH3 → GPIO 39 | LEDC ch 6 → GPIO 23 | LEDC ch 7 → GPIO 19 |
+
+WS2812 RGB output is a `rgb_channels[2]` array; the second entry is only
+enabled when the strip-count detector on ADC1_CH7 reads high.
+
+| Function | GPIO | Peripheral | Evidence |
+|----------|------|-----------|----------|
+| **LED Strip Count Detect** | ADC1_CH7 (GPIO 35) | ADC oneshot | `adc_oneshot_config_channel(handle, 7, ...)` in `hall_adc_init` |
+| **WS2812 Strip 1** | GPIO 14 | RMT TX | `rgb_channels[0].gpio_num = 14` (dumped from 0x3ffb031c) |
+| **WS2812 Strip 2** | GPIO 4  | RMT TX | `rgb_channels[1].gpio_num = 4`  (dumped from 0x3ffb0338) |
 
 ### ESP32 ADC1 Channel → GPIO Reference
 
@@ -61,6 +81,14 @@ Key details:
 - **Forward/reverse PWM** via ESP32 LEDC peripheral (`fwd_chan` / `rev_chan`)
 - **Gradual startup** (soft-start ramp to prevent mechanical shock)
 - Functions: `motor_pwm_init`, `motor_ledc_timer_init`, `hall_adc_init`, `hall_get_state`
+- Per-group config struct is 0x24 bytes; fields at offsets 0x14/0x18/0x1c/0x20
+  hold fwd/rev LEDC channel + fwd/rev GPIO. Hall ADC channel is at +0x04.
+
+The 4-group layout suggests the hardware supports controlling multiple vent
+modules from one board (or a multi-flap vent), not a single vent motor. The
+number of *active* groups at runtime is stored at `PTR_DAT_400d0da4` and
+determined during init — likely via strip-detect ADC or a separate
+enumeration. Needs on-hardware confirmation.
 - LEDC functions used: `ledc_timer_config`, `ledc_channel_config`, `ledc_set_duty`, `ledc_update_duty`, `ledc_set_fade_with_time`, `ledc_fade_start`
 
 ## RGB LED Subsystem

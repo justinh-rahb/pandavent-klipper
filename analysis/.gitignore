@@ -1,0 +1,5 @@
+segments/
+ghidra_project/
+venv/
+decomp/
+*.log
