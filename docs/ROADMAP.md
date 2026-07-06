@@ -75,7 +75,7 @@ To match the stock BTT firmware capabilities, the following features must be imp
 
 ### Vent Button Parity (Minor Adjustments)
 - [x] Single-click in AUTO immediately switches to MANUAL and reverses vent state (`app_main:on_button`)
-- [x] Long-press mode switch, 6 s to match the current [BTT wiki](https://neo.bttwiki.com/en/docs/panda-series/module/panda-vent/panda-vent-firmware) (the v1.0.0 binary used 3 s per `DAT_400d0948 = 2999 × 10 ms`; BTT appears to have doubled the threshold in a later firmware update)
+- [x] Long-press mode switch (3 s per stock v1.0.0 binary `DAT_400d0948 = 2999 × 10 ms` and shipped user manual; the [BTT wiki](https://neo.bttwiki.com/en/docs/panda-series/module/panda-vent/panda-vent-firmware) says 6 s but v1.0.0 is the only released firmware — the wiki appears aspirational)
 - [x] Status LED matches stock: OFF during AUTO, blinking during MANUAL (`app_main:reflect_mode_on_led`)
 
 ## Phase 3 — Firmware Parity (RGB Lighting & Themes)

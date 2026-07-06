@@ -32,9 +32,11 @@ Firmware image segment layout (from `esptool image-info`):
 |----------|------|-----------|--------|
 | **User Button (switch)** | GPIO 12 | GPIO input (pull-up, active-low) | BTT User Manual + stock disassembly |
 | **User Button LED**     | GPIO 27 | GPIO output (active-high; off = auto, blink = manual) | Stock disassembly (`gpio_config_t` at 0x3f417100 + LED loop `FUN_400dec04`) |
-| **BOOT Button** | GPIO 0 | GPIO input (factory reset, 6 s hold) | BTT wiki |
+| **BOOT Button** | GPIO 0 | GPIO input (factory reset, 3 s hold) | BTT user manual + binary |
 
-Long-press threshold: **6 s** per the current [BTT wiki](https://neo.bttwiki.com/en/docs/panda-series/module/panda-vent/panda-vent-firmware). The v1.0.0 stock binary we reverse-engineered uses `DAT_400d0948 = 2999` (~3 s per 10 ms tick), and the v1.0.0 user manual PDF also says 3 s — but BTT appears to have raised the threshold to 6 s in a later firmware update. We match the wiki (current behavior users see documented).
+Long-press threshold: **3 s** for both buttons. Two BTT sources agree —
+the v1.0.0 stock binary (`DAT_400d0948 = 2999`, × 10 ms tick) and the
+v1.0.0 shipped user manual PDF. The public [BTT wiki](https://neo.bttwiki.com/en/docs/panda-series/module/panda-vent/panda-vent-firmware) says 6 s, but v1.0.0 is the only firmware version BTT ever released — the wiki appears aspirational rather than documenting shipped behavior. We match ground truth.
 
 ### Confirmed (from Ghidra disassembly — see `analysis/`)
 
