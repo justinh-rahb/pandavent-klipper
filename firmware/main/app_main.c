@@ -27,11 +27,11 @@ static void reflect_mode_on_led(void)
                           : PV_STATUS_LED_BLINK);
 }
 
-// Button semantics from the stock firmware user manual:
+// Button semantics from the stock firmware:
 //   USER short click, AUTO   → switch to MANUAL and reverse the vent state
 //   USER short click, MANUAL → toggle the vent state
-//   USER long press          → toggle AUTO ↔ MANUAL
-//   BOOT long press          → factory reset (wipe NVS, reboot)
+//   USER long press (3 s)    → switch to AUTO
+//   BOOT long press (3 s)    → factory reset (wipe NVS, reboot)
 static void on_button(pv_button_id_t id, pv_button_event_t ev)
 {
     if (id == PV_BUTTON_USER && ev == PV_BUTTON_SHORT) {
@@ -43,8 +43,8 @@ static void on_button(pv_button_id_t id, pv_button_event_t ev)
         return;
     }
     if (id == PV_BUTTON_USER && ev == PV_BUTTON_LONG) {
-        // Wiki: "Long-press the Illuminated button for 6 seconds — Switch from
-        // MANUAL mode back to AUTO mode." Always AUTO, no toggle.
+        // Stock's long-press callback unconditionally goes to AUTO
+        // (FUN_400de994(0)); no toggle.
         pv_policy_set_mode(PV_POLICY_MODE_AUTO);
         reflect_mode_on_led();
         ESP_LOGI(TAG, "USER long: mode=AUTO");

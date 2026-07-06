@@ -66,7 +66,7 @@ firmware/
     ├── pv_board/            # GPIO pin map — single source of truth
     ├── pv_motor/            # 30 kHz LEDC PWM + hall ADC state machine (4 groups)
     ├── pv_button/           # USER + BOOT debouncing, short/long press dispatch
-    ├── pv_status_led/       # user-button LED: solid = auto, blink = manual
+    ├── pv_status_led/       # user-button LED: off = auto, blink = manual
     ├── pv_wifi/             # STA + AP fallback, NVS-backed credentials
     ├── pv_moonraker/        # WebSocket client, subscribes to print_stats + heater_bed
     ├── pv_policy/           # auto/manual mode, hysteresis-based open/close decision

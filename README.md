@@ -27,7 +27,7 @@ The Panda Vent is a smart vent riser for enclosed 3D printers. The stock firmwar
 - **Board**: Bigtreetech Panda Vent (ESP32 Xtensa dual-core LX6)
 - **Motors**: up to 4 independent DC motors across two mainboard chains, each driven forward/reverse via LEDC PWM at 30 kHz with hall-sensor position feedback
 - **LEDs**: WS2812 addressable strips via RMT — GPIO 14 and GPIO 4, one per chain
-- **User button**: switch on GPIO 12, illumination LED on GPIO 27 (steady = auto, blink = manual)
+- **User button**: switch on GPIO 12, illumination LED on GPIO 27 (off = auto, blink = manual)
 - **BOOT button**: GPIO 0 (long-press = factory reset)
 - **Hardware auto-detect**: single ADC on GPIO 35 picks between "all chains populated" (4 motors), "one chain" (2 motors), and "nothing" — hot-plug supported
 
