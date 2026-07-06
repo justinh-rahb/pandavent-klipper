@@ -209,16 +209,16 @@ static void start_sta_mode(const char *ssid, const char *pass)
 
 static void handle_scan_done(void)
 {
+    // Land the results directly in the cache — the event-loop task's stack
+    // (default 2304 B) can't spare 1.6 KB for a local wifi_ap_record_t[20].
     uint16_t count = PV_WIFI_SCAN_MAX;
-    wifi_ap_record_t recs[PV_WIFI_SCAN_MAX];
-    esp_err_t err = esp_wifi_scan_get_ap_records(&count, recs);
+    xSemaphoreTake(s_scan_lock, portMAX_DELAY);
+    esp_err_t err = esp_wifi_scan_get_ap_records(&count, s_scan_cache);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "scan_get_ap_records: %s", esp_err_to_name(err));
         count = 0;
     }
-    xSemaphoreTake(s_scan_lock, portMAX_DELAY);
     s_scan_count = count;
-    memcpy(s_scan_cache, recs, count * sizeof(wifi_ap_record_t));
     s_scanning = false;
     xSemaphoreGive(s_scan_lock);
     ESP_LOGI(TAG, "scan done: %d networks", (int)count);
