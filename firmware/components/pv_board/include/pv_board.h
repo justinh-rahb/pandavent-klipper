@@ -30,9 +30,12 @@
 #define PV_PIN_RGB_STRIP_0      GPIO_NUM_14
 #define PV_PIN_RGB_STRIP_1      GPIO_NUM_4
 
-// Motor groups. All four are populated in the retail kit (2 vent units × 2
-// motors each). The single-vent kit uses only groups 0/1 or 2/3 depending on
-// which mainboard connector is used — pairing not yet verified.
+// Motor groups. Firmware supports up to 4, populated by chaining vent modules
+// on the mainboard's two 15-pin ports. Each vent module has one motor + one
+// hall sensor and identical 3-pin JST connectors on both ends, so a chain can
+// be extended by plugging into the pass-through. Which chain owns which pair
+// of group indices (0/1 vs 2/3) is not yet verified — needs on-hardware
+// confirmation.
 typedef struct {
     adc_channel_t  hall_adc_ch;     // ADC1 channel for the hall sensor
     ledc_channel_t fwd_ledc_ch;

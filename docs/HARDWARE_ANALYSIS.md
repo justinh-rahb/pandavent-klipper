@@ -85,11 +85,15 @@ Key details:
 - Per-group config struct is 0x24 bytes; fields at offsets 0x14/0x18/0x1c/0x20
   hold fwd/rev LEDC channel + fwd/rev GPIO. Hall ADC channel is at +0x04.
 
-The 4-group layout matches the retail kit inventory: the Panda Vent ships
-with **two vent units, each containing two independent motors** (likely
-one per flap, or open/close pair). The mainboard exposes two 15-pin
-connectors; each 15P cable breaks out to a 5P (RGB board) + 6P (2 motors:
-4 PWM + 2 hall) + likely a 3P (button/detect).
+The 4-group layout supports **up to four daisy-chained vent modules**, one
+motor per module. Each vent has identical 3-pin JST connectors on both ends
+(user-observed), so a chain can be extended by plugging the next module into
+the outgoing side of the previous one. The mainboard exposes two 15-pin
+connectors — one per chain — that each break out to a 5P (RGB / detect) +
+6P (motor signals) + likely a small connector for control. The retail kit
+ships two chains' worth of modules that together populate all four motor
+groups; the "single-vent" band of the config detect (2 groups) corresponds
+to a partial kit or one populated chain.
 
 ### Hardware-config auto-detection
 
