@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "mdns.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -26,7 +27,31 @@ static const char *TAG = "pv_wifi";
 
 static pv_wifi_state_t s_state = PV_WIFI_STATE_INIT;
 static EventGroupHandle_t s_events = NULL;
+static esp_netif_t *s_sta_netif = NULL;
+static esp_netif_t *s_ap_netif = NULL;
 static int s_retry = 0;
+static bool s_mdns_started = false;
+
+static esp_err_t start_mdns(void)
+{
+    if (s_mdns_started) return ESP_OK;
+
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) return err;
+
+    err = mdns_hostname_set(PV_WIFI_HOSTNAME);
+    if (err != ESP_OK) return err;
+
+    err = mdns_instance_name_set(PV_WIFI_HOSTNAME);
+    if (err != ESP_OK) return err;
+
+    err = mdns_service_add(PV_WIFI_HOSTNAME, "_http", "_tcp", 80, NULL, 0);
+    if (err != ESP_OK) return err;
+
+    s_mdns_started = true;
+    ESP_LOGI(TAG, "mDNS hostname: %s.local", PV_WIFI_HOSTNAME);
+    return ESP_OK;
+}
 
 // ---------- NVS helpers ----------
 
@@ -157,8 +182,13 @@ esp_err_t pv_wifi_start(void)
     // Netif + event loop
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
-    esp_netif_create_default_wifi_ap();
+    s_sta_netif = esp_netif_create_default_wifi_sta();
+    s_ap_netif = esp_netif_create_default_wifi_ap();
+    if (s_sta_netif == NULL || s_ap_netif == NULL) return ESP_FAIL;
+
+    ESP_ERROR_CHECK(esp_netif_set_hostname(s_sta_netif, PV_WIFI_HOSTNAME));
+    ESP_ERROR_CHECK(esp_netif_set_hostname(s_ap_netif, PV_WIFI_HOSTNAME));
+    ESP_ERROR_CHECK(start_mdns());
 
     // WiFi driver
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();

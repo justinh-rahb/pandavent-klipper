@@ -30,3 +30,4 @@ pv_wifi_state_t pv_wifi_state(void);
 // AP details, useful for portal DNS/HTTP setup.
 #define PV_WIFI_AP_PASSWORD    "987654321"   // matches stock firmware
 #define PV_WIFI_AP_SSID_PREFIX "Panda_Vent_"
+#define PV_WIFI_HOSTNAME       "PandaVent"    // resolves as PandaVent.local via mDNS
