@@ -12,7 +12,7 @@ static const char *TAG = "pv_button";
 
 #define TICK_MS            10
 #define DEBOUNCE_TICKS     2      // 20 ms — settle time after a level change
-#define LONG_PRESS_MS      3000   // matches stock firmware
+#define LONG_PRESS_MS      6000   // matches BTT wiki (v1.0.0 binary used 3 s)
 
 typedef struct {
     pv_button_id_t id;

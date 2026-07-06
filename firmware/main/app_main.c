@@ -43,11 +43,11 @@ static void on_button(pv_button_id_t id, pv_button_event_t ev)
         return;
     }
     if (id == PV_BUTTON_USER && ev == PV_BUTTON_LONG) {
-        pv_policy_mode_t next = (pv_policy_get_mode() == PV_POLICY_MODE_AUTO)
-                                    ? PV_POLICY_MODE_MANUAL : PV_POLICY_MODE_AUTO;
-        pv_policy_set_mode(next);
+        // Wiki: "Long-press the Illuminated button for 6 seconds — Switch from
+        // MANUAL mode back to AUTO mode." Always AUTO, no toggle.
+        pv_policy_set_mode(PV_POLICY_MODE_AUTO);
         reflect_mode_on_led();
-        ESP_LOGI(TAG, "USER long: mode=%s", next == PV_POLICY_MODE_AUTO ? "AUTO" : "MANUAL");
+        ESP_LOGI(TAG, "USER long: mode=AUTO");
         return;
     }
     if (id == PV_BUTTON_BOOT && ev == PV_BUTTON_LONG) {
