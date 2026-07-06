@@ -10,8 +10,9 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
 - Provide a captive portal AP for WiFi setup (like stock firmware)
 - Simple web UI for Moonraker connection settings
 - OTA firmware updates via web UI
+- Complete feature parity with original Bigtreetech firmware
 
-## Phase 1 — MVP
+## Phase 1 — MVP (Hardware Bring-up & Core Logic)
 
 ### Vent Control via Moonraker
 - [x] Connect to Moonraker via WebSocket (`pv_moonraker`)
@@ -26,12 +27,10 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
 - [x] Web page to enter SSID + password
 - [x] Store WiFi credentials in NVS (`app_nvs` namespace, stock-compatible)
 - [x] Auto-reconnect to saved WiFi on boot
-- [ ] Scan visible networks and pick from a list (currently: type SSID by hand)
 
 ### Moonraker Configuration
 - [x] Web page: enter Moonraker IP/hostname and port
 - [x] Optional API key field
-- [ ] mDNS discovery of `_moonraker._tcp` services
 - [x] Store config in NVS
 - [x] Connection status indicator on web UI (status header)
 
@@ -41,10 +40,9 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
 - [x] Hall sensor reading for vent position feedback (5-state classifier)
 - [x] Button handler: debounce, single-click, long-press (`pv_button`)
 - [x] Status LED on user button (`pv_status_led`; GPIO 27, solid = auto, blink = manual)
+- [x] Read hardware-config ADC on GPIO 35 to pick 0/2/4 active motor groups
 
-### Remaining before hardware bring-up
-- [x] Read hardware-config ADC on GPIO 35 to pick 0/2/4 active motor groups (`pv_motor` samples once per second with 3-cycle debounce; matches stock's hot-plug behavior)
-- [ ] mDNS hostname (`PandaVent.local`)
+### Remaining Core Verification
 - [ ] On-device verification pass:
   - LED indicates mode correctly
   - Portal reachable from browser (both AP and STA modes)
@@ -52,22 +50,63 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
   - Confirm which mainboard chain maps to motor groups 0/1 vs 2/3
   - Confirm the 3-way config-detect ADC bands hit the expected raw values
 
-## Phase 2 — RGB & Effects
+## Phase 2 — Firmware Parity (Web UI & Settings)
 
+To match the stock BTT firmware capabilities, the following features must be implemented in the Web UI and backend:
+
+### Wi-Fi Page Parity
+- [ ] Network Scanner: Scan for visible Wi-Fi networks and display as a selectable list (currently requires manual entry)
+- [ ] Connection Status: Display IP address and clear connection status/troubleshooting prompts
+
+### AP Page Parity
+- [ ] Configurable AP Hotspot: Allow user to change AP SSID, Password, and IP subnet
+- [ ] AP Toggle: Allow disabling the AP hotspot entirely to save resources
+- [ ] Apply & Reboot: Require and handle device reboot to apply AP changes
+
+### Printer (Moonraker) Page Parity
+- [ ] Printer Discovery: Implement mDNS discovery for `_moonraker._tcp` to populate a selectable list of printers on the LAN, eliminating manual IP entry
+
+### Settings Page Parity
+- [ ] OTA Updates: Implement `.bin` upload via Web UI and OTA flashing process
+- [ ] Factory Reset: Add Web UI button for clearing NVS and rebooting
+- [ ] Firmware Version: Display current version
+- [ ] Language Toggle: Support for English and Simplified Chinese (optional, but needed for 1:1 parity)
+- [ ] Hardware Reset: Implement BOOT button (GPIO 0) 6-second long-press to factory reset
+
+### Vent Button Parity (Minor Adjustments)
+- [ ] Ensure single-click in AUTO mode immediately switches to MANUAL and reverses vent state (already mostly implemented)
+- [ ] Adjust button timings to match stock: 6-second long-press for mode switch (instead of generic long-press)
+- [ ] Status LED matches stock: OFF during AUTO, blinking (0.5s) during MANUAL
+
+## Phase 3 — Firmware Parity (RGB Lighting & Themes)
+
+The stock firmware relies heavily on RGB status lighting via WS2812 strips. This requires implementing the `pv_rgb` RMT driver and a complex effects engine.
+
+### RGB Driver & Core
 - [ ] WS2812 LED strip driver via RMT
-- [ ] Auto-detect strip count (1 or 2) via ADC on GPIO 35
-- [ ] Map printer states to LED colors/effects
-- [ ] Web UI for RGB configuration
-- [ ] Temperature-based color gradients
+- [ ] Auto-detect strip count (1 strip = 16 LEDs, 2 strips = 27 LEDs) via ADC on GPIO 35
 
-## Phase 3 — Polish
+### Theme Page (Control UI)
+- [ ] Main Light Switch: Global toggle for all RGB effects
+- [ ] Warning Override Switch: Flash red globally on printer error (overrides all effects)
+- [ ] Behavior Toggles: "Follow Printer Mode" (colors match state) vs "Follow Exhaust Vent" (colors match vent open/close)
+- [ ] Reverse Direction: Toggle to reverse the flow of LED effects
 
-- [ ] OTA firmware update via web UI
-- [ ] Factory reset via BOOT button long-press
-- [ ] mDNS hostname configuration
-- [ ] Print progress on LEDs (percentage bar)
-- [ ] Klipper macro integration (allow macros to control vent/LEDs)
-- [ ] Home Assistant / MQTT bridge (optional)
+### Light Modes Engine
+- [ ] **Simple Mode**: Fixed effect applied to all LEDs. 
+  - Support 7 effects: Solid, Breathing, Flash, Flow, Marquee, Rainbow Cycle, Multicolor.
+  - Support adjustable Color, Brightness (0-100%), Speed (0-100%).
+- [ ] **Advance Mode (H2D)**: State-machine-driven effects based on Moonraker status.
+  - Configure distinct effect, color, brightness, and speed for each state: Idle, Preparing, Printing, Paused, Complete, Error.
+- [ ] **Warning Hot Mode**: Temperature-driven effects based on Moonraker `heater_bed` or `extruder`.
+  - Safe State (Green) vs Danger State (Red).
+  - Support static or flashing effects with adjustable brightness and speed.
+
+## Phase 4 — Extras & Polish
+
+- [ ] Print progress on LEDs (percentage bar using Moonraker `display_status` / `virtual_sdcard`)
+- [ ] Klipper macro integration (allow macros to explicitly control vent/LEDs via custom endpoints)
+- [ ] Home Assistant / MQTT bridge (optional fallback for non-Moonraker setups)
 
 ## Architecture
 
@@ -77,71 +116,23 @@ button callback, mirror policy mode to the LED.
 
 ```
                     ┌─────────────────────────────┐
-   printer ─── ws ──┤  pv_moonraker  (WS client)  │
-                    │  print_stats, heater_bed    │
-                    └──────────┬──────────────────┘
-                               │ status
-                               ▼
-   button ──►  pv_button ──►  pv_policy ──►  pv_motor  ──► 4x DC motor
-                    │        (auto/manual)      │           + hall ADC
-                    │              │            │
-                    ▼              ▼            │
-              pv_status_led    pv_portal ◄──────┘  (web UI in both AP + STA)
-              (GPIO 27)             │
-                                    ▼
-                                 pv_wifi (STA + AP fallback)
+    printer ─── ws ──┤  pv_moonraker  (WS client)  │
+                     │  print_stats, heater_bed    │
+                     └──────────┬──────────────────┘
+                                │ status
+                                ▼
+    button ──►  pv_button ──►  pv_policy ──►  pv_motor  ──► 4x DC motor
+                     │        (auto/manual)      │           + hall ADC
+                     │              │            │
+                     ▼              ▼            │
+               pv_status_led    pv_portal ◄──────┘  (web UI in both AP + STA)
+               (GPIO 27)             │
+                                     ▼
+                                  pv_wifi (STA + AP fallback)
 
-   pv_board = pin definitions shared by every component (single source of truth)
+    pv_board = pin definitions shared by every component (single source of truth)
 ```
 
 Every long-lived component owns its own FreeRTOS task and exposes a thread-safe
 API. Shared state (WiFi/Moonraker/policy) lives in the `app_nvs` NVS namespace
 so it survives reboots and is compatible with the stock firmware's layout.
-
-External:
-
-```
-    Klipper host ── Moonraker ── ws ──► ESP32 ── PWM ──► vent motors
-                                  │
-                                  └── mDNS (planned) ── PandaVent.local
-```
-
-## State Machine
-
-```
-                    ┌─────────┐
-          ┌────────►│  IDLE   │◄────────┐
-          │         │vent shut│         │
-          │         └────┬────┘         │
-          │              │              │
-     bed cools      bed heats      error/cancel
-     below thr.     above thr.          │
-          │              │              │
-          │              ▼              │
-          │         ┌─────────┐         │
-          ├─────────│PRINTING │─────────┤
-          │         │vent open│         │
-          │         └────┬────┘         │
-          │              │              │
-          │           paused            │
-          │              │              │
-          │              ▼              │
-          │         ┌─────────┐         │
-          └─────────│ PAUSED  │─────────┘
-                    │vent hold│
-                    └─────────┘
-```
-
-## Moonraker Status Mapping
-
-| Moonraker `print_stats.state` | Vent Action | LED (Phase 2) |
-|-------------------------------|-------------|---------------|
-| `"standby"` | Closed | White |
-| `"printing"` | Open (auto) | Rainbow |
-| `"paused"` | Hold position | White |
-| `"complete"` | Open (cool-down timer) | Green |
-| `"error"` / `"cancelled"` | Closed | Red |
-| Klipper not ready | Closed | Breathing blue |
-
-Bed temperature is the primary trigger: vent opens when `heater_bed.temperature`
-exceeds a configurable threshold (default: 40°C), closes when it drops below.
