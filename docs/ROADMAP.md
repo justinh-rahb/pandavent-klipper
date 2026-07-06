@@ -11,35 +11,41 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
 - Simple web UI for Moonraker connection settings
 - OTA firmware updates via web UI
 
-## Phase 1 — MVP (Current Focus)
+## Phase 1 — MVP
 
 ### Vent Control via Moonraker
-- [ ] Connect to Moonraker via WebSocket or HTTP polling
-- [ ] Subscribe to `print_stats` and `heater_bed` objects
-- [ ] Open vent when bed is heated / printing is active
-- [ ] Close vent when bed cools down / printer is idle
-- [ ] Auto/manual mode toggle via physical button (GPIO 12)
-- [ ] Long-press button to switch between auto and manual mode
+- [x] Connect to Moonraker via WebSocket (`pv_moonraker`)
+- [x] Subscribe to `print_stats` and `heater_bed` objects
+- [x] Open vent when bed is heated / printing is active (`pv_policy`, AUTO mode)
+- [x] Close vent when bed cools down / printer is idle (35 °C / 45 °C hysteresis)
+- [x] Auto/manual mode toggle via physical button (GPIO 12) (`pv_button` + `app_main`)
+- [x] Long-press button to switch between auto and manual mode
 
 ### WiFi & Captive Portal
-- [ ] AP mode on first boot (captive portal with DNS redirect)
-- [ ] Web page: scan WiFi networks, select SSID, enter password
-- [ ] Store WiFi credentials in NVS
-- [ ] Auto-reconnect to saved WiFi on boot
+- [x] AP mode on first boot (captive portal with DNS redirect) (`pv_wifi` + `pv_portal`)
+- [x] Web page to enter SSID + password
+- [x] Store WiFi credentials in NVS (`app_nvs` namespace, stock-compatible)
+- [x] Auto-reconnect to saved WiFi on boot
+- [ ] Scan visible networks and pick from a list (currently: type SSID by hand)
 
 ### Moonraker Configuration
-- [ ] Web page: enter Moonraker IP/hostname and port
-- [ ] Optional API key field
+- [x] Web page: enter Moonraker IP/hostname and port
+- [x] Optional API key field
 - [ ] mDNS discovery of `_moonraker._tcp` services
-- [ ] Store config in NVS
-- [ ] Connection status indicator on web UI
+- [x] Store config in NVS
+- [x] Connection status indicator on web UI (status header)
 
 ### Hardware Drivers
-- [ ] Confirm all GPIO pin assignments (Ghidra disassembly)
-- [ ] Motor driver: LEDC PWM forward/reverse with soft-start
-- [ ] Hall sensor reading for vent position feedback
-- [ ] Button handler: debounce, single-click, long-press
-- [ ] Status LED on GPIO 12 button (solid = auto, blink = manual)
+- [x] GPIO pin assignments confirmed via Ghidra disassembly ([HARDWARE_ANALYSIS](HARDWARE_ANALYSIS.md))
+- [x] Motor driver: LEDC PWM forward/reverse with soft-start (`pv_motor`)
+- [x] Hall sensor reading for vent position feedback (5-state classifier)
+- [x] Button handler: debounce, single-click, long-press (`pv_button`)
+- [x] Status LED on user button (`pv_status_led`; GPIO 27, solid = auto, blink = manual)
+
+### Remaining before hardware bring-up
+- [ ] Read hardware-config ADC on GPIO 35 at boot to pick 0/2/4 active motor groups (currently hardcoded to 4)
+- [ ] mDNS hostname (`PandaVent.local`)
+- [ ] On-device verification pass (heartbeat visible, motors respond, hall reads plausible, portal reachable)
 
 ## Phase 2 — RGB & Effects
 
@@ -60,39 +66,39 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
 
 ## Architecture
 
+Firmware is split into standalone ESP-IDF components under `firmware/components/`.
+`app_main` is a thin orchestrator: boot each service in order, register the
+button callback, mirror policy mode to the LED.
+
 ```
-┌──────────────────────────────────────────────────┐
-│  Panda Vent (ESP32)                              │
-│                                                  │
-│  ┌──────────┐  ┌──────────────┐  ┌───────────┐  │
-│  │ Captive  │  │  Moonraker   │  │   State   │  │
-│  │ Portal   │  │   Client     │  │  Machine  │  │
-│  │ (httpd)  │  │  (websocket) │  │           │  │
-│  └────┬─────┘  └──────┬───────┘  └─────┬─────┘  │
-│       │               │                │         │
-│       │               ▼                ▼         │
-│       │         ┌──────────┐    ┌───────────┐    │
-│       │         │   NVS    │    │  Motor    │    │
-│       │         │  Config  │    │  Driver   │    │
-│       │         └──────────┘    │  (LEDC)   │    │
-│       │                         └───────────┘    │
-│       ▼                                          │
-│  ┌──────────┐                   ┌───────────┐    │
-│  │  WiFi    │                   │  RGB LEDs │    │
-│  │  (STA+AP)│                   │  (RMT)    │    │
-│  └──────────┘                   └───────────┘    │
-└──────────────────────────────────────────────────┘
-         │                              
-         ▼                              
-┌──────────────────┐                    
-│  Klipper Host    │                    
-│  ┌────────────┐  │                    
-│  │ Moonraker  │  │                    
-│  └────────────┘  │                    
-│  ┌────────────┐  │                    
-│  │  Klipper   │  │                    
-│  └────────────┘  │                    
-└──────────────────┘                    
+                    ┌─────────────────────────────┐
+   printer ─── ws ──┤  pv_moonraker  (WS client)  │
+                    │  print_stats, heater_bed    │
+                    └──────────┬──────────────────┘
+                               │ status
+                               ▼
+   button ──►  pv_button ──►  pv_policy ──►  pv_motor  ──► 4x DC motor
+                    │        (auto/manual)      │           + hall ADC
+                    │              │            │
+                    ▼              ▼            │
+              pv_status_led    pv_portal ◄──────┘  (web UI in both AP + STA)
+              (GPIO 27)             │
+                                    ▼
+                                 pv_wifi (STA + AP fallback)
+
+   pv_board = pin definitions shared by every component (single source of truth)
+```
+
+Every long-lived component owns its own FreeRTOS task and exposes a thread-safe
+API. Shared state (WiFi/Moonraker/policy) lives in the `app_nvs` NVS namespace
+so it survives reboots and is compatible with the stock firmware's layout.
+
+External:
+
+```
+    Klipper host ── Moonraker ── ws ──► ESP32 ── PWM ──► vent motors
+                                  │
+                                  └── mDNS (planned) ── PandaVent.local
 ```
 
 ## State Machine

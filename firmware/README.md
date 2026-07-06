@@ -31,10 +31,26 @@ idf.py -p /dev/tty.usbserial-* flash monitor
 
 ## Layout
 
-- `main/app_main.c` — entry point (currently just a button-LED heartbeat)
-- `main/hw_pins.h`  — GPIO map recovered from stock firmware; single source of truth
-- `partitions.csv`  — OTA-capable 4MB layout (two app slots + NVS)
-- `sdkconfig.defaults` — checked-in defaults; `sdkconfig` itself is generated & gitignored
+```
+firmware/
+├── CMakeLists.txt
+├── partitions.csv           # OTA-capable 4MB layout (two app slots + two NVS)
+├── sdkconfig.defaults       # checked in; sdkconfig itself is generated + gitignored
+├── main/
+│   └── app_main.c           # thin orchestrator: init components, route buttons
+└── components/
+    ├── pv_board/            # GPIO pin map — single source of truth
+    ├── pv_motor/            # 30 kHz LEDC PWM + hall ADC state machine (4 groups)
+    ├── pv_button/           # USER + BOOT debouncing, short/long press dispatch
+    ├── pv_status_led/       # user-button LED: solid = auto, blink = manual
+    ├── pv_wifi/             # STA + AP fallback, NVS-backed credentials
+    ├── pv_moonraker/        # WebSocket client, subscribes to print_stats + heater_bed
+    ├── pv_policy/           # auto/manual mode, hysteresis-based open/close decision
+    └── pv_portal/           # unified web UI (AP + STA), captive DNS in AP mode
+```
+
+Each component owns its own task, exposes a thread-safe API, and persists any
+state under the `app_nvs` namespace (stock-firmware-compatible).
 
 ## Flashing the first time
 

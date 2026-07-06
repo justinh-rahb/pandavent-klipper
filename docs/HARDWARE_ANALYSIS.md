@@ -48,13 +48,13 @@ array in DRAM whose per-group struct we dumped from memory:
 | **3** | ADC1_CH3 → GPIO 39 | LEDC ch 6 → GPIO 23 | LEDC ch 7 → GPIO 19 |
 
 WS2812 RGB output is a `rgb_channels[2]` array; the second entry is only
-enabled when the strip-count detector on ADC1_CH7 reads high.
+enabled in the retail 2-vent kit configuration (see auto-detect below).
 
 | Function | GPIO | Peripheral | Evidence |
 |----------|------|-----------|----------|
-| **LED Strip Count Detect** | ADC1_CH7 (GPIO 35) | ADC oneshot | `adc_oneshot_config_channel(handle, 7, ...)` in `hall_adc_init` |
-| **WS2812 Strip 1** | GPIO 14 | RMT TX | `rgb_channels[0].gpio_num = 14` (dumped from 0x3ffb031c) |
-| **WS2812 Strip 2** | GPIO 4  | RMT TX | `rgb_channels[1].gpio_num = 4`  (dumped from 0x3ffb0338) |
+| **Hardware config detect** | ADC1_CH7 (GPIO 35) | ADC oneshot | `adc_oneshot_config_channel(handle, 7, ...)` in `hall_adc_init`; three-band classifier in `FUN_400deb88` |
+| **WS2812 Strip 0** | GPIO 14 | RMT TX | `rgb_channels[0].gpio_num = 14` (dumped from 0x3ffb031c) |
+| **WS2812 Strip 1** | GPIO 4  | RMT TX | `rgb_channels[1].gpio_num = 4`  (dumped from 0x3ffb0338) |
 
 ### ESP32 ADC1 Channel → GPIO Reference
 
@@ -144,7 +144,7 @@ Source file paths found in binary:
 Key details:
 - Uses **RMT peripheral** for WS2812 timing (standard ESP-IDF approach)
 - Supports **multiple RMT channels**: `rgb_channels[i].channel`, `rgb_channels[i].encoder`
-- Auto-detects 1 strip (16 LEDs) vs 2 strips (27 LEDs) via ADC on GPIO 35
+- LED count and strip count are picked from the same GPIO 35 config-detect ADC as the motor group count (see "Hardware-config auto-detection" above)
 - 7 effect modes: static, breathing, strobing, wave, marquee, color cycle, rainbow
 - Functions: `rgb_init`, `rgb_light_mode`, `rgb_switch`, `rgb_sundry`, `sys_rgb_mode`, `rmt_new_led_strip_encoder`, `rmt_transmit`
 
