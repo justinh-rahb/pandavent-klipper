@@ -1,0 +1,51 @@
+name: Firmware Build
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware-build.yml"
+      - ".github/workflows/firmware-release.yml"
+  pull_request:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware-build.yml"
+      - ".github/workflows/firmware-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ESP32 firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.1
+          target: esp32
+          path: firmware
+
+      - name: Upload firmware build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: pandavent-klipper-firmware-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            firmware/build/pandavent_klipper.bin
+            firmware/build/pandavent_klipper.elf
+            firmware/build/pandavent_klipper.map
+            firmware/build/bootloader/bootloader.bin
+            firmware/build/partition_table/partition-table.bin
+            firmware/build/ota_data_initial.bin
+            firmware/build/flasher_args.json
+            firmware/build/flash_args

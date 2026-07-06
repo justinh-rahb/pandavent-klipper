@@ -1,0 +1,84 @@
+name: Firmware Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or update, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.1
+          target: esp32
+          path: firmware
+
+      - name: Package release artifacts
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          cp firmware/build/pandavent_klipper.bin dist/
+          cp firmware/build/pandavent_klipper.elf dist/
+          cp firmware/build/pandavent_klipper.map dist/
+          cp firmware/build/bootloader/bootloader.bin dist/
+          cp firmware/build/partition_table/partition-table.bin dist/
+          cp firmware/build/ota_data_initial.bin dist/
+          cp firmware/build/flasher_args.json dist/
+          cp firmware/build/flash_args dist/
+
+          cat > dist/FLASHING.txt <<'EOF'
+          Flash from the firmware/ directory with:
+
+            idf.py -p PORT flash
+
+          Or flash the release artifacts manually with:
+
+            python -m esptool --chip esp32 -b 460800 --before default_reset --after hard_reset \
+              write_flash --flash_mode dio --flash_size 4MB --flash_freq 40m \
+              0x1000 bootloader.bin \
+              0x8000 partition-table.bin \
+              0xf000 ota_data_initial.bin \
+              0x20000 pandavent_klipper.bin
+          EOF
+
+          cd dist
+          sha256sum * > SHA256SUMS
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pandavent-klipper-release-${{ github.event.inputs.tag || github.ref_name }}
+          if-no-files-found: error
+          retention-days: 30
+          path: dist/*
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --title "$RELEASE_TAG" --generate-notes
+          fi

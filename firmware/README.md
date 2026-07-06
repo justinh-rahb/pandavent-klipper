@@ -29,6 +29,12 @@ idf.py -p /dev/tty.usbserial-* flash monitor
 
 `Ctrl-]` exits the monitor.
 
+## CI / releases
+
+GitHub Actions builds the firmware on pushes and pull requests that touch
+`firmware/` or workflow files. Release artifacts are produced when a `v*` tag
+is pushed, or by running the "Firmware Release" workflow manually with a tag.
+
 ## Layout
 
 ```
