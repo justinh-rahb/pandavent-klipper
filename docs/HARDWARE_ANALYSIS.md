@@ -88,13 +88,50 @@ The 4-group layout matches the retail kit inventory: the Panda Vent ships
 with **two vent units, each containing two independent motors** (likely
 one per flap, or open/close pair). The mainboard exposes two 15-pin
 connectors; each 15P cable breaks out to a 5P (RGB board) + 6P (2 motors:
-4 PWM + 2 hall) + likely a 3P (button/detect). All four groups are
-populated in stock hardware — BTT's user manual explicitly states "4 motor
-channel groups (GROUP 1 to 4)".
+4 PWM + 2 hall) + likely a 3P (button/detect).
 
-The runtime count at `PTR_DAT_400d0da4` still exists; it likely defaults
-to 4 but may be overridden for a boardless / partial-kit configuration.
-Not yet traced.
+### Hardware-config auto-detection
+
+ADC1_CH7 (GPIO 35) is not just LED-strip detect — it's a single analog
+line that resistor-divides differently based on what's plugged in, and
+selects the whole hardware configuration at boot:
+
+| ADC raw range | Motors | RGB strips | LED count |
+|---------------|--------|------------|-----------|
+| ~1900–2400    | 4      | 2          | 27        |
+| ~1100–1700    | 2      | 1          | 16        |
+| < 201         | 0      | 0          | 0         |
+
+This means a single Panda Vent unit (one vent + one RGB board plugged
+into just one of the two 15P connectors) runs the same firmware with only
+2 motor groups active. Groups 0/1 vs. 2/3 mapping to left vs. right
+connector — not yet verified.
+
+### Motor drive state machine
+
+Per motor (from `motor.c` decompilation):
+
+- Shared LEDC timer 0, low-speed mode, **30 kHz** PWM, 10-bit resolution
+  (max duty = 1023 = 0x3ff)
+- "Open" = drive `fwd_chan`; "Close" = drive `rev_chan`
+- Direction change: stop opposite channel → 500 ms dead-time → fade active
+  channel duty 0 → 1023 over 20 ms (`ledc_set_fade_with_time` + `fade_start`)
+- Stop: fade active channel duty to 0 over 10 ms, then hard-off both
+- Up to 4 retries if hall doesn't confirm the target position
+
+Hall reading (from `motor_adc.c`) buckets the raw ADC into discrete states:
+
+| Return | Meaning                | Raw ADC range        |
+|--------|------------------------|----------------------|
+| 0      | invalid / disconnected | 0                    |
+| 1      | endpoint A ("closed")  | ~640–960 (0x280–0x3c0)|
+| 2      | endpoint B ("open")    | ~1360–1680 (0x550–0x690)|
+| 3      | mid-travel low         | raw + (-2080) < 0x173|
+| 4      | mid-travel high        | otherwise            |
+
+The main control loop reads the target state (1 or 2, set by user/auto
+logic), compares with `hall_get_state()`, and drives the corresponding
+direction until the hall reads the matching endpoint.
 - LEDC functions used: `ledc_timer_config`, `ledc_channel_config`, `ledc_set_duty`, `ledc_update_duty`, `ledc_set_fade_with_time`, `ledc_fade_start`
 
 ## RGB LED Subsystem
