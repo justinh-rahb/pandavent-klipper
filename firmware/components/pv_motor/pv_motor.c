@@ -37,6 +37,19 @@ static const char *TAG = "pv_motor";
 #define HALL_MID_LOW_TEST   0x173
 #define HALL_MID_OFFSET     (-2080)             // signed; 0xfffff7e0 as int32
 
+// Config-detect thresholds — from stock's FUN_400deb88. Three bands with
+// deliberate gaps: readings in the gaps mean "keep current config".
+#define DETECT_TWO_LO       0x76c   // ADC ∈ [0x76c, 0x960] → 4 motors, 2 strips
+#define DETECT_TWO_HI       (0x76c + 0x1f5)
+#define DETECT_ONE_LO       0x44c   // ADC ∈ [0x44c, 0x6a4] → 2 motors, 1 strip
+#define DETECT_ONE_HI       (0x44c + 0x259)
+#define DETECT_NONE_HI      0xc9    // ADC <  0xc9        → nothing connected
+
+// Config detect cadence: sample every 100 ticks (~1 s) and require the band
+// to hold for DEBOUNCE_CYCLES consecutive samples before we act on it.
+#define DETECT_INTERVAL_TICKS   100
+#define DETECT_DEBOUNCE_CYCLES  3
+
 typedef enum {
     DIR_NONE = 0,
     DIR_FWD,
@@ -58,6 +71,11 @@ static adc_oneshot_unit_handle_t s_adc_handle = NULL;
 static group_state_t    s_groups[PV_MOTOR_GROUP_COUNT];
 static SemaphoreHandle_t s_lock = NULL;
 static TaskHandle_t     s_task = NULL;
+
+// Config-detect state — only touched from the motor task.
+static int s_detect_last_band  = -1;
+static int s_detect_streak     = 0;
+static int s_detect_countdown  = 0;
 
 // ---------- helpers ----------
 
@@ -100,6 +118,21 @@ static pv_motor_hall_t read_hall(int g)
         return PV_HALL_INVALID;
     }
     return classify_hall(raw);
+}
+
+// Read the config-detect ADC and classify to an active-group count. Returns
+// -1 if the reading falls in a hysteresis gap — caller should hold the
+// current config.
+static int classify_hwconfig(void)
+{
+    int raw = 0;
+    if (adc_oneshot_read(s_adc_handle, PV_ADC_CONFIG_DETECT_CH, &raw) != ESP_OK) {
+        return -1;
+    }
+    if (raw >= DETECT_TWO_LO && raw < DETECT_TWO_HI) return 4;
+    if (raw >= DETECT_ONE_LO && raw < DETECT_ONE_HI) return 2;
+    if (raw <  DETECT_NONE_HI)                       return 0;
+    return -1;
 }
 
 // Cut both channels immediately (used for stop / init / dead-time entry).
@@ -167,6 +200,87 @@ static void begin_drive_toward(int g, pv_motor_target_t target)
     st->drive_started_tick = xTaskGetTickCount();
 }
 
+// ---------- hot-plug reconfiguration ----------
+
+// Configure LEDC channels + hall ADC channel for one motor group. Idempotent —
+// safe to re-run for a group that's already configured.
+static esp_err_t hw_init_group(int g)
+{
+    const pv_motor_group_t *m = &PV_MOTOR_GROUPS[g];
+    ledc_channel_config_t fwd = {
+        .gpio_num   = m->fwd_gpio,
+        .speed_mode = LEDC_MODE,
+        .channel    = m->fwd_ledc_ch,
+        .intr_type  = LEDC_INTR_DISABLE,
+        .timer_sel  = LEDC_TIMER,
+        .duty       = 0,
+        .hpoint     = 0,
+    };
+    ledc_channel_config_t rev = fwd;
+    rev.gpio_num = m->rev_gpio;
+    rev.channel  = m->rev_ledc_ch;
+    ESP_RETURN_ON_ERROR(ledc_channel_config(&fwd), TAG, "ledc fwd grp=%d", g);
+    ESP_RETURN_ON_ERROR(ledc_channel_config(&rev), TAG, "ledc rev grp=%d", g);
+
+    adc_oneshot_chan_cfg_t chan = {
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+        .atten    = ADC_ATTEN_DB_12,
+    };
+    ESP_RETURN_ON_ERROR(
+        adc_oneshot_config_channel(s_adc_handle, m->hall_adc_ch, &chan),
+        TAG, "adc hall grp=%d", g);
+    return ESP_OK;
+}
+
+// Move to the new active count. Adds groups by configuring their peripherals;
+// removes them by stopping the motor (channels are left configured but idle).
+// Runs on the motor task, so no locking needed against tick_group.
+static void reconfigure_to(int new_count)
+{
+    if (new_count == s_active_groups) return;
+
+    ESP_LOGI(TAG, "hwconfig change: %d → %d motor groups",
+             s_active_groups, new_count);
+
+    if (new_count > s_active_groups) {
+        for (int g = s_active_groups; g < new_count; ++g) {
+            if (hw_init_group(g) != ESP_OK) {
+                ESP_LOGE(TAG, "aborting reconfig: grp=%d init failed", g);
+                return;
+            }
+            memset(&s_groups[g], 0, sizeof(s_groups[g]));
+        }
+    } else {
+        for (int g = new_count; g < s_active_groups; ++g) {
+            stop_drive(g);
+            s_groups[g].target  = PV_MOTOR_TARGET_STOP;
+            s_groups[g].applied = PV_MOTOR_TARGET_STOP;
+        }
+    }
+    s_active_groups = new_count;
+}
+
+// Called from the task on a slow cadence. Debounces the ADC band across
+// DETECT_DEBOUNCE_CYCLES consecutive samples before it changes anything.
+static void tick_hwconfig(void)
+{
+    int band = classify_hwconfig();
+    if (band < 0) {
+        // Reading in a hysteresis gap — noise or partial connect; keep waiting.
+        s_detect_streak = 0;
+        return;
+    }
+    if (band == s_detect_last_band) {
+        if (s_detect_streak < DETECT_DEBOUNCE_CYCLES) s_detect_streak++;
+        if (s_detect_streak >= DETECT_DEBOUNCE_CYCLES && band != s_active_groups) {
+            reconfigure_to(band);
+        }
+    } else {
+        s_detect_last_band = band;
+        s_detect_streak = 1;
+    }
+}
+
 // ---------- state machine tick (per group) ----------
 
 static void tick_group(int g)
@@ -227,14 +341,29 @@ static void motor_task(void *arg)
     (void)arg;
     for (;;) {
         for (int g = 0; g < s_active_groups; ++g) tick_group(g);
+
+        // Sample the hardware-config ADC on a slower cadence.
+        if (--s_detect_countdown <= 0) {
+            s_detect_countdown = DETECT_INTERVAL_TICKS;
+            tick_hwconfig();
+        }
+
         vTaskDelay(pdMS_TO_TICKS(TICK_MS));
     }
 }
 
 // ---------- init ----------
 
-static esp_err_t configure_ledc(void)
+esp_err_t pv_motor_init(void)
 {
+    if (s_task != NULL) return ESP_ERR_INVALID_STATE;
+
+    memset(s_groups, 0, sizeof(s_groups));
+    s_lock = xSemaphoreCreateMutex();
+    if (s_lock == NULL) return ESP_ERR_NO_MEM;
+
+    // LEDC timer + fade — needed even if no motors are currently connected,
+    // so we're ready to bring channels online when a vent is plugged in.
     ledc_timer_config_t t = {
         .speed_mode      = LEDC_MODE,
         .timer_num       = LEDC_TIMER,
@@ -243,70 +372,39 @@ static esp_err_t configure_ledc(void)
         .clk_cfg         = LEDC_AUTO_CLK,
     };
     ESP_RETURN_ON_ERROR(ledc_timer_config(&t), TAG, "ledc_timer_config");
-
-    for (int g = 0; g < s_active_groups; ++g) {
-        const pv_motor_group_t *m = &PV_MOTOR_GROUPS[g];
-        ledc_channel_config_t fwd = {
-            .gpio_num   = m->fwd_gpio,
-            .speed_mode = LEDC_MODE,
-            .channel    = m->fwd_ledc_ch,
-            .intr_type  = LEDC_INTR_DISABLE,
-            .timer_sel  = LEDC_TIMER,
-            .duty       = 0,
-            .hpoint     = 0,
-        };
-        ledc_channel_config_t rev = fwd;
-        rev.gpio_num = m->rev_gpio;
-        rev.channel  = m->rev_ledc_ch;
-        ESP_RETURN_ON_ERROR(ledc_channel_config(&fwd), TAG, "ledc fwd grp=%d", g);
-        ESP_RETURN_ON_ERROR(ledc_channel_config(&rev), TAG, "ledc rev grp=%d", g);
-    }
-
     ESP_RETURN_ON_ERROR(ledc_fade_func_install(0), TAG, "ledc_fade_func_install");
-    return ESP_OK;
-}
 
-static esp_err_t configure_adc(void)
-{
+    // ADC1 unit + the config-detect channel are always configured; hall
+    // channels come online as groups activate.
     adc_oneshot_unit_init_cfg_t unit = { .unit_id = ADC_UNIT_1 };
     ESP_RETURN_ON_ERROR(adc_oneshot_new_unit(&unit, &s_adc_handle), TAG, "adc unit");
-
-    adc_oneshot_chan_cfg_t chan = {
+    adc_oneshot_chan_cfg_t detect_cfg = {
         .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten    = ADC_ATTEN_DB_12,   // full-scale ~3.3 V — hall thresholds assume this
+        .atten    = ADC_ATTEN_DB_12,
     };
-    for (int g = 0; g < s_active_groups; ++g) {
-        ESP_RETURN_ON_ERROR(
-            adc_oneshot_config_channel(s_adc_handle, PV_MOTOR_GROUPS[g].hall_adc_ch, &chan),
-            TAG, "adc chan grp=%d", g);
+    ESP_RETURN_ON_ERROR(
+        adc_oneshot_config_channel(s_adc_handle, PV_ADC_CONFIG_DETECT_CH, &detect_cfg),
+        TAG, "adc detect chan");
+
+    // Initial synchronous detect: sample a few times to ride out startup noise.
+    int initial = 0;
+    for (int i = 0; i < 5; ++i) {
+        int b = classify_hwconfig();
+        if (b >= 0) initial = b;
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
-    return ESP_OK;
-}
-
-esp_err_t pv_motor_init(int active_groups)
-{
-    if (active_groups < 0 || active_groups > PV_MOTOR_GROUP_COUNT) {
-        return ESP_ERR_INVALID_ARG;
+    for (int g = 0; g < initial; ++g) {
+        ESP_RETURN_ON_ERROR(hw_init_group(g), TAG, "init grp=%d", g);
     }
-    if (s_task != NULL) return ESP_ERR_INVALID_STATE;
+    s_active_groups     = initial;
+    s_detect_last_band  = initial;
+    s_detect_streak     = DETECT_DEBOUNCE_CYCLES;
+    s_detect_countdown  = DETECT_INTERVAL_TICKS;
 
-    s_active_groups = active_groups;
-    memset(s_groups, 0, sizeof(s_groups));
-    s_lock = xSemaphoreCreateMutex();
-    if (s_lock == NULL) return ESP_ERR_NO_MEM;
-
-    if (active_groups == 0) {
-        ESP_LOGI(TAG, "no active motor groups; driver idle");
-        return ESP_OK;
+    if (xTaskCreate(motor_task, "pv_motor", 4096, NULL, 5, &s_task) != pdPASS) {
+        return ESP_ERR_NO_MEM;
     }
-
-    ESP_RETURN_ON_ERROR(configure_ledc(), TAG, "ledc");
-    ESP_RETURN_ON_ERROR(configure_adc(),  TAG, "adc");
-
-    BaseType_t ok = xTaskCreate(motor_task, "pv_motor", 4096, NULL, 5, &s_task);
-    if (ok != pdPASS) return ESP_ERR_NO_MEM;
-
-    ESP_LOGI(TAG, "initialized with %d active group(s)", active_groups);
+    ESP_LOGI(TAG, "initialized; detected %d motor group(s) at boot", initial);
     return ESP_OK;
 }
 

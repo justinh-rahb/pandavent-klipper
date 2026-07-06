@@ -25,10 +25,12 @@ typedef enum {
     PV_HALL_MID_HIGH = 4,        // mid-travel, near open
 } pv_motor_hall_t;
 
-// Initialize the LEDC timer/channels + ADC for the first `active_groups` motor
-// groups (must be 0, 2, or 4 — matches stock's config-detect result). Spawns
-// the driver task.
-esp_err_t pv_motor_init(int active_groups);
+// Initialize the LEDC timer + ADC1, sample the config-detect ADC (GPIO 35) to
+// figure out how many motor groups are currently connected, bring those
+// groups online, and spawn the driver task. The task continues to sample the
+// detect ADC once per second and dynamically add/remove groups as vent units
+// are hot-plugged.
+esp_err_t pv_motor_init(void);
 
 // Set the target state for one group. group index in [0, active_groups).
 esp_err_t pv_motor_set_target(int group, pv_motor_target_t target);
@@ -40,5 +42,6 @@ pv_motor_hall_t pv_motor_hall(int group);
 // True while a group is actively driving toward its target.
 bool pv_motor_is_running(int group);
 
-// Active group count (0/2/4), as passed to pv_motor_init.
+// Currently active group count (0/2/4), as most recently determined by the
+// hardware-config detect ADC.
 int pv_motor_active_groups(void);

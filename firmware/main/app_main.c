@@ -14,10 +14,6 @@
 
 static const char *TAG = "pv";
 
-// TODO: read PV_ADC_CONFIG_DETECT_CH at boot and pick 0/2/4 here. For now,
-// hardcode the retail-kit value and confirm empirically once hardware lands.
-#define BOOT_ACTIVE_MOTOR_GROUPS 4
-
 static pv_motor_target_t flip(pv_motor_target_t t)
 {
     return (t == PV_MOTOR_TARGET_OPEN) ? PV_MOTOR_TARGET_CLOSED : PV_MOTOR_TARGET_OPEN;
@@ -67,7 +63,7 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "PandaVent-Klipper booting");
 
-    ESP_ERROR_CHECK(pv_motor_init(BOOT_ACTIVE_MOTOR_GROUPS));
+    ESP_ERROR_CHECK(pv_motor_init());
     ESP_ERROR_CHECK(pv_wifi_start());
     ESP_ERROR_CHECK(pv_moonraker_start());
     ESP_ERROR_CHECK(pv_policy_start());
