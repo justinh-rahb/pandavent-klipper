@@ -1,0 +1,14 @@
+# Target the classic ESP32 (Xtensa dual-core LX6) — same silicon as stock.
+CONFIG_IDF_TARGET="esp32"
+
+# 4 MB flash matches the stock Panda Vent module (see esptool image-info).
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# Use our OTA-capable partition table.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Room for logs before wifi/httpd come up.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
