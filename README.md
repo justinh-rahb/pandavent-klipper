@@ -37,6 +37,8 @@ Full pin map + provenance: [docs/HARDWARE_ANALYSIS.md](docs/HARDWARE_ANALYSIS.md
 
 🚧 **Phase 1 firmware complete, awaiting hardware bring-up.** Every component compiles against ESP-IDF v5.3+; on-device verification is the next milestone.
 
+[![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/wildtang3nt)
+
 ## License
 
 [MIT](LICENSE) © Justin Hayes
