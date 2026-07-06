@@ -193,8 +193,9 @@ static esp_err_t send_wifi_section(httpd_req_t *req)
         "<select name=\"ssid\">"
         "<option value=\"\">— pick a network —</option>");
 
-    // Scanned networks.
-    wifi_ap_record_t recs[PV_WIFI_SCAN_MAX];
+    // Scanned networks. `recs` is static so we don't put ~1.6 KB on the
+    // httpd task's 4 KB stack; httpd is single-threaded, so no lock needed.
+    static wifi_ap_record_t recs[PV_WIFI_SCAN_MAX];
     int n = pv_wifi_get_scan_results(recs, PV_WIFI_SCAN_MAX);
     for (int i = 0; i < n; ++i) {
         char ssid_esc[80];
