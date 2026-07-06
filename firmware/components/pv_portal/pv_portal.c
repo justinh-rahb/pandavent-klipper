@@ -1,48 +1,26 @@
 #include "pv_portal.h"
 #include "pv_dns.h"
+#include "pv_moonraker.h"
+#include "pv_policy.h"
+#include "pv_wifi.h"
 
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "pv_portal";
 
-static httpd_handle_t       s_httpd   = NULL;
-static pv_portal_save_cb_t  s_save_cb = NULL;
+static httpd_handle_t s_httpd = NULL;
+static bool           s_ap_mode = false;
 
-// ---------- HTML ----------
+// ---------- URL-encoded form parsing ----------
 
-static const char *SETUP_HTML =
-"<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
-"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-"<title>PandaVent Setup</title>"
-"<style>"
-"body{font-family:sans-serif;max-width:420px;margin:2em auto;padding:0 1em}"
-"h1{font-size:1.4em}label{display:block;margin:1em 0 .25em}"
-"input,button{width:100%;padding:.6em;font-size:1em;box-sizing:border-box}"
-"button{margin-top:1.5em;background:#222;color:#fff;border:0;border-radius:4px}"
-"</style></head><body>"
-"<h1>PandaVent WiFi setup</h1>"
-"<form method=\"POST\" action=\"/save\">"
-"<label>Network SSID</label>"
-"<input name=\"ssid\" required maxlength=\"32\">"
-"<label>Password</label>"
-"<input name=\"password\" type=\"password\" maxlength=\"64\">"
-"<button type=\"submit\">Save &amp; reboot</button>"
-"</form></body></html>";
-
-static const char *DONE_HTML =
-"<!DOCTYPE html><html><body>"
-"<h1>Saved. Rebooting…</h1>"
-"<p>PandaVent will disconnect from this network and try to join yours.</p>"
-"</body></html>";
-
-// ---------- helpers ----------
-
-// Extract a value for `key` from a url-encoded form body. Writes into `out`
-// and NUL-terminates. Returns 0 on success, -1 if not found.
+// Extract a value for `key` from a url-encoded form body. NUL-terminates.
+// Returns 0 on success, -1 if not found.
 static int form_get(const char *body, const char *key, char *out, size_t out_sz)
 {
     size_t klen = strlen(key);
@@ -72,51 +50,261 @@ static int form_get(const char *body, const char *key, char *out, size_t out_sz)
     return -1;
 }
 
-// ---------- handlers ----------
-
-static esp_err_t setup_get(httpd_req_t *req)
+// Copy a value into a buffer with HTML-attribute-safe escaping.
+static void html_escape(const char *in, char *out, size_t out_sz)
 {
-    httpd_resp_set_type(req, "text/html");
-    return httpd_resp_sendstr(req, SETUP_HTML);
+    size_t o = 0;
+    for (const char *p = in; *p && o + 6 < out_sz; ++p) {
+        const char *r = NULL;
+        switch (*p) {
+            case '&':  r = "&amp;";  break;
+            case '<':  r = "&lt;";   break;
+            case '>':  r = "&gt;";   break;
+            case '"':  r = "&quot;"; break;
+            case '\'': r = "&#39;";  break;
+        }
+        if (r) {
+            size_t rl = strlen(r);
+            memcpy(out + o, r, rl);
+            o += rl;
+        } else {
+            out[o++] = *p;
+        }
+    }
+    out[o] = '\0';
 }
 
-static esp_err_t save_post(httpd_req_t *req)
+// Read the request body into `out`.
+static int recv_body(httpd_req_t *req, char *out, size_t out_sz)
 {
-    char body[256];
     int total = req->content_len;
-    if (total <= 0 || total >= (int)sizeof(body)) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body too long");
-        return ESP_OK;
-    }
+    if (total <= 0 || total >= (int)out_sz) return -1;
     int off = 0;
     while (off < total) {
-        int n = httpd_req_recv(req, body + off, total - off);
-        if (n <= 0) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed");
-            return ESP_OK;
-        }
+        int n = httpd_req_recv(req, out + off, total - off);
+        if (n <= 0) return -1;
         off += n;
     }
-    body[off] = '\0';
+    out[off] = '\0';
+    return off;
+}
 
-    char ssid[33] = {0};
-    char pass[65] = {0};
+// ---------- status/label helpers ----------
+
+static const char *wifi_label(pv_wifi_state_t s)
+{
+    switch (s) {
+        case PV_WIFI_STATE_INIT:            return "starting";
+        case PV_WIFI_STATE_STA_CONNECTING:  return "connecting";
+        case PV_WIFI_STATE_STA_CONNECTED:   return "STA connected";
+        case PV_WIFI_STATE_AP_PORTAL:       return "AP mode (setup)";
+    }
+    return "?";
+}
+
+static const char *mk_label(pv_moonraker_state_t s)
+{
+    switch (s) {
+        case PV_MK_DISABLED:      return "not configured";
+        case PV_MK_DISCONNECTED:  return "disconnected";
+        case PV_MK_CONNECTING:    return "connecting…";
+        case PV_MK_CONNECTED:     return "handshaking";
+        case PV_MK_SUBSCRIBED:    return "connected";
+    }
+    return "?";
+}
+
+static const char *target_label(pv_motor_target_t t)
+{
+    return t == PV_MOTOR_TARGET_OPEN ? "OPEN"
+         : t == PV_MOTOR_TARGET_CLOSED ? "CLOSED" : "STOP";
+}
+
+// ---------- HTML rendering ----------
+
+// Emit the whole page into `out`. We render server-side rather than pulling in
+// a JS client so this works from any browser and doesn't leak state through
+// GETs.
+static void render_page(char *out, size_t out_sz)
+{
+    pv_moonraker_config_t mk_cfg   = {0};
+    pv_moonraker_status_t mk_stat  = {0};
+    pv_moonraker_get_config(&mk_cfg);
+    pv_moonraker_get_status(&mk_stat);
+
+    char host_esc[128];
+    html_escape(mk_cfg.host, host_esc, sizeof(host_esc));
+
+    bool manual = pv_policy_get_mode() == PV_POLICY_MODE_MANUAL;
+    pv_motor_target_t target = pv_policy_get_target();
+
+    snprintf(out, out_sz,
+"<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+"<title>PandaVent</title>"
+"<style>"
+"body{font-family:sans-serif;max-width:520px;margin:1em auto;padding:0 1em;color:#222}"
+"h1{font-size:1.3em}h2{font-size:1.05em;margin-top:1.6em;border-bottom:1px solid #ddd;padding-bottom:.2em}"
+"label{display:block;margin:.7em 0 .2em;font-size:.9em;color:#555}"
+"input,button,select{width:100%%;padding:.55em;font-size:1em;box-sizing:border-box}"
+"button{margin-top:1em;background:#222;color:#fff;border:0;border-radius:4px;cursor:pointer}"
+".status{background:#f4f4f4;padding:.7em 1em;border-radius:4px;font-size:.9em;line-height:1.4}"
+".status b{display:inline-block;min-width:110px}"
+".row{display:flex;gap:.5em}.row>*{flex:1}"
+".radios label{display:inline-block;margin-right:1em;font-size:1em;color:#222}"
+".radios input{width:auto;margin-right:.3em}"
+"</style></head><body>"
+"<h1>PandaVent</h1>"
+"<div class=\"status\">"
+  "<div><b>WiFi:</b> %s</div>"
+  "<div><b>Moonraker:</b> %s</div>"
+  "<div><b>Printer state:</b> %s (bed %.1f\xC2\xB0""C)</div>"
+  "<div><b>Vent target:</b> %s</div>"
+  "<div><b>Mode:</b> %s</div>"
+"</div>"
+
+"<h2>WiFi</h2>"
+"<form method=\"POST\" action=\"/wifi\">"
+  "<label>SSID</label><input name=\"ssid\" required maxlength=\"32\">"
+  "<label>Password</label><input name=\"password\" type=\"password\" maxlength=\"64\">"
+  "<button>Save &amp; reboot</button>"
+"</form>"
+
+"<h2>Moonraker</h2>"
+"<form method=\"POST\" action=\"/moonraker\">"
+  "<div class=\"row\">"
+    "<div><label>Host / IP</label><input name=\"host\" value=\"%s\" required maxlength=\"63\"></div>"
+    "<div style=\"max-width:130px\"><label>Port</label><input name=\"port\" type=\"number\" value=\"%u\" min=\"1\" max=\"65535\"></div>"
+  "</div>"
+  "<label>API key (leave blank to keep current)</label>"
+  "<input name=\"api_key\" maxlength=\"64\" autocomplete=\"off\">"
+  "<button>Save Moonraker</button>"
+"</form>"
+
+"<h2>Mode</h2>"
+"<form method=\"POST\" action=\"/mode\">"
+  "<div class=\"radios\">"
+    "<label><input type=\"radio\" name=\"mode\" value=\"auto\"%s>Auto</label>"
+    "<label><input type=\"radio\" name=\"mode\" value=\"manual\"%s>Manual</label>"
+  "</div>"
+  "<label style=\"margin-top:1em\">Manual target (used in Manual mode)</label>"
+  "<div class=\"radios\">"
+    "<label><input type=\"radio\" name=\"manual_target\" value=\"open\"%s>Open</label>"
+    "<label><input type=\"radio\" name=\"manual_target\" value=\"closed\"%s>Closed</label>"
+  "</div>"
+  "<button>Save Mode</button>"
+"</form>"
+"</body></html>",
+    wifi_label(pv_wifi_state()),
+    mk_label(mk_stat.state),
+    mk_stat.printing ? "printing" : "idle",
+    mk_stat.bed_temp,
+    target_label(target),
+    manual ? "MANUAL" : "AUTO",
+
+    host_esc,
+    mk_cfg.port ? mk_cfg.port : 7125,
+
+    manual ? "" : " checked",
+    manual ? " checked" : "",
+    target == PV_MOTOR_TARGET_OPEN ? " checked" : "",
+    target != PV_MOTOR_TARGET_OPEN ? " checked" : "");
+}
+
+// ---------- request handlers ----------
+
+static esp_err_t handle_root(httpd_req_t *req)
+{
+    static char page[4096];
+    render_page(page, sizeof(page));
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_sendstr(req, page);
+}
+
+static esp_err_t handle_wifi_post(httpd_req_t *req)
+{
+    char body[256];
+    if (recv_body(req, body, sizeof(body)) < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+        return ESP_OK;
+    }
+    char ssid[33] = {0}, pass[65] = {0};
     if (form_get(body, "ssid", ssid, sizeof(ssid)) != 0 || ssid[0] == '\0') {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing ssid");
         return ESP_OK;
     }
-    form_get(body, "password", pass, sizeof(pass));   // ok if missing
-
+    form_get(body, "password", pass, sizeof(pass));
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_sendstr(req, DONE_HTML);
-
-    if (s_save_cb) s_save_cb(ssid, pass);   // typically reboots; won't return
+    httpd_resp_sendstr(req,
+        "<!DOCTYPE html><body><h1>Saved. Rebooting…</h1></body>");
+    pv_wifi_save_creds_and_reboot(ssid, pass);   // does not return
     return ESP_OK;
 }
 
-// Catch-all: send a 302 back to the setup page so captive-portal detection
-// probes (Apple/Google/Microsoft) trigger the "Sign in to network" banner.
-static esp_err_t captive_redirect(httpd_req_t *req)
+static esp_err_t handle_moonraker_post(httpd_req_t *req)
+{
+    char body[512];
+    if (recv_body(req, body, sizeof(body)) < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+        return ESP_OK;
+    }
+    pv_moonraker_config_t cfg = {0};
+    pv_moonraker_get_config(&cfg);   // start from current (preserves api_key on blank)
+
+    char host[64] = {0}, port_str[8] = {0}, api_key[65] = {0};
+    if (form_get(body, "host", host, sizeof(host)) != 0 || host[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing host");
+        return ESP_OK;
+    }
+    strncpy(cfg.host, host, sizeof(cfg.host) - 1);
+
+    if (form_get(body, "port", port_str, sizeof(port_str)) == 0 && port_str[0]) {
+        long p = strtol(port_str, NULL, 10);
+        if (p > 0 && p < 65536) cfg.port = (uint16_t)p;
+    }
+    if (form_get(body, "api_key", api_key, sizeof(api_key)) == 0 && api_key[0] != '\0') {
+        strncpy(cfg.api_key, api_key, sizeof(cfg.api_key) - 1);
+    }
+    esp_err_t err = pv_moonraker_set_config(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "moonraker_set_config: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed");
+        return ESP_OK;
+    }
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t handle_mode_post(httpd_req_t *req)
+{
+    char body[128];
+    if (recv_body(req, body, sizeof(body)) < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+        return ESP_OK;
+    }
+    char mode[16] = {0}, manual_target[16] = {0};
+    form_get(body, "mode", mode, sizeof(mode));
+    form_get(body, "manual_target", manual_target, sizeof(manual_target));
+
+    if (strcmp(mode, "manual") == 0) {
+        pv_motor_target_t t = strcmp(manual_target, "open") == 0
+                                  ? PV_MOTOR_TARGET_OPEN
+                                  : PV_MOTOR_TARGET_CLOSED;
+        pv_policy_set_manual_target(t);
+        pv_policy_set_mode(PV_POLICY_MODE_MANUAL);
+    } else {
+        pv_policy_set_mode(PV_POLICY_MODE_AUTO);
+    }
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// AP-mode catch-all: 302 to /, so captive-portal detectors trigger.
+static esp_err_t handle_captive_redirect(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "/");
@@ -132,45 +320,43 @@ static uint32_t get_ap_gateway_ip(void)
     if (ap == NULL) return 0;
     esp_netif_ip_info_t info;
     if (esp_netif_get_ip_info(ap, &info) != ESP_OK) return 0;
-    return info.gw.addr;   // already network byte order
+    return info.gw.addr;
 }
 
-esp_err_t pv_portal_start(pv_portal_save_cb_t save_cb)
+esp_err_t pv_portal_start(void)
 {
     if (s_httpd != NULL) return ESP_ERR_INVALID_STATE;
-    s_save_cb = save_cb;
-
-    uint32_t ip = get_ap_gateway_ip();
-    if (ip == 0) {
-        ESP_LOGE(TAG, "no AP netif; call after esp_wifi_start in AP mode");
-        return ESP_ERR_INVALID_STATE;
-    }
-    esp_err_t err = pv_dns_start(ip);
-    if (err != ESP_OK) return err;
+    s_ap_mode = (pv_wifi_state() == PV_WIFI_STATE_AP_PORTAL);
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.uri_match_fn = httpd_uri_match_wildcard;
-    err = httpd_start(&s_httpd, &cfg);
+    esp_err_t err = httpd_start(&s_httpd, &cfg);
     if (err != ESP_OK) return err;
 
-    httpd_uri_t get_root  = { .uri = "/",     .method = HTTP_GET,  .handler = setup_get };
-    httpd_uri_t post_save = { .uri = "/save", .method = HTTP_POST, .handler = save_post };
-    httpd_uri_t catchall  = { .uri = "/*",    .method = HTTP_GET,  .handler = captive_redirect };
-    httpd_register_uri_handler(s_httpd, &get_root);
-    httpd_register_uri_handler(s_httpd, &post_save);
-    httpd_register_uri_handler(s_httpd, &catchall);
+    httpd_uri_t root  = { .uri = "/",          .method = HTTP_GET,  .handler = handle_root };
+    httpd_uri_t wifi  = { .uri = "/wifi",      .method = HTTP_POST, .handler = handle_wifi_post };
+    httpd_uri_t mk    = { .uri = "/moonraker", .method = HTTP_POST, .handler = handle_moonraker_post };
+    httpd_uri_t mode  = { .uri = "/mode",      .method = HTTP_POST, .handler = handle_mode_post };
+    httpd_register_uri_handler(s_httpd, &root);
+    httpd_register_uri_handler(s_httpd, &wifi);
+    httpd_register_uri_handler(s_httpd, &mk);
+    httpd_register_uri_handler(s_httpd, &mode);
 
-    ESP_LOGI(TAG, "portal up on http://" IPSTR, IP2STR((esp_ip4_addr_t *)&ip));
+    if (s_ap_mode) {
+        uint32_t ip = get_ap_gateway_ip();
+        if (ip != 0) pv_dns_start(ip);
+        httpd_uri_t catchall = { .uri = "/*", .method = HTTP_GET, .handler = handle_captive_redirect };
+        httpd_register_uri_handler(s_httpd, &catchall);
+        ESP_LOGI(TAG, "portal up (AP mode, DNS on)");
+    } else {
+        ESP_LOGI(TAG, "portal up (STA mode)");
+    }
     return ESP_OK;
 }
 
 esp_err_t pv_portal_stop(void)
 {
     pv_dns_stop();
-    if (s_httpd) {
-        httpd_stop(s_httpd);
-        s_httpd = NULL;
-    }
-    s_save_cb = NULL;
+    if (s_httpd) { httpd_stop(s_httpd); s_httpd = NULL; }
     return ESP_OK;
 }

@@ -1,17 +1,15 @@
 #pragma once
 
-// Captive portal: DNS server that answers every A-record query with the AP
-// gateway IP, plus an HTTP server that serves the WiFi setup page and posts
-// submitted credentials to a caller-supplied callback. Call after WiFi is
-// running in AP mode.
+// PandaVent config web UI. Serves the same page in both AP and STA modes so
+// initial setup and later reconfiguration use the same URL. In AP mode it
+// also runs a DNS redirector so mobile OSes pop the "Sign in to network"
+// prompt automatically.
+//
+// Call after pv_wifi_start() (and ideally after pv_moonraker_start() and
+// pv_policy_start(), so pre-fill values are correct). The portal decides
+// AP vs. STA behavior from pv_wifi_state().
 
 #include "esp_err.h"
 
-// Invoked from the HTTP request handler when the user submits the form.
-// Typically stores the credentials to NVS and reboots into STA mode; the
-// implementation is expected NOT to return (or to return quickly enough for
-// the HTTP response to flush).
-typedef esp_err_t (*pv_portal_save_cb_t)(const char *ssid, const char *password);
-
-esp_err_t pv_portal_start(pv_portal_save_cb_t save_cb);
+esp_err_t pv_portal_start(void);
 esp_err_t pv_portal_stop(void);

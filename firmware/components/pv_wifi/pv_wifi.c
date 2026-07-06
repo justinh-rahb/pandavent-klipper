@@ -1,5 +1,4 @@
 #include "pv_wifi.h"
-#include "pv_portal.h"
 
 #include "esp_event.h"
 #include "esp_log.h"
@@ -90,9 +89,7 @@ static void start_ap_mode(void)
 
     s_state = PV_WIFI_STATE_AP_PORTAL;
     ESP_LOGI(TAG, "AP SSID=%s password=%s", ap.ap.ssid, ap.ap.password);
-
-    esp_err_t err = pv_portal_start(pv_wifi_save_creds_and_reboot);
-    if (err != ESP_OK) ESP_LOGE(TAG, "portal_start failed: %s", esp_err_to_name(err));
+    // Portal is started by app_main after pv_wifi_start returns.
 }
 
 // ---------- STA mode ----------
