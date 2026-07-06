@@ -27,3 +27,5 @@ pv_policy_mode_t pv_policy_get_mode(void);
 
 esp_err_t pv_policy_set_manual_target(pv_motor_target_t t);
 pv_motor_target_t pv_policy_get_target(void);          // whatever we're commanding
+
+esp_err_t pv_policy_clear(void);   // wipe persisted mode

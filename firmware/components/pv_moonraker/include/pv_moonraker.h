@@ -37,3 +37,6 @@ esp_err_t pv_moonraker_set_config(const pv_moonraker_config_t *cfg);
 
 esp_err_t pv_moonraker_get_config(pv_moonraker_config_t *out);
 esp_err_t pv_moonraker_get_status(pv_moonraker_status_t *out);
+
+// Wipe saved Moonraker config. Used for factory reset.
+esp_err_t pv_moonraker_clear_config(void);

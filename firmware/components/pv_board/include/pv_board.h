@@ -8,9 +8,14 @@
 #include "driver/ledc.h"
 #include "hal/adc_types.h"
 
-// Buttons
-#define PV_PIN_USER_BUTTON      GPIO_NUM_12   // illuminated user button (input + LED)
-#define PV_PIN_BOOT_BUTTON      GPIO_NUM_0    // BOOT / factory reset
+// Buttons. Stock firmware confirms both are inputs with internal pull-ups
+// (active-low). The user button has a built-in LED, but stock does NOT drive
+// it from GPIO 12 — the LED pin is not yet identified (or the LED is
+// hardwired always-on). GPIO 12 is also a strapping pin (MTDI, picks flash
+// voltage at boot); it must stay LOW during reset — the internal pull-up
+// only engages after our code runs, so this is fine.
+#define PV_PIN_USER_BUTTON      GPIO_NUM_12
+#define PV_PIN_BOOT_BUTTON      GPIO_NUM_0
 
 // Hardware-config auto-detect. Single ADC line whose raw value picks between
 // three kit configurations (see docs/HARDWARE_ANALYSIS.md):

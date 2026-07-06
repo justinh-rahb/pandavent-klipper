@@ -282,3 +282,16 @@ esp_err_t pv_moonraker_get_status(pv_moonraker_status_t *out)
     xSemaphoreGive(s_lock);
     return ESP_OK;
 }
+
+esp_err_t pv_moonraker_clear_config(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+    nvs_erase_key(h, KEY_HOST);
+    nvs_erase_key(h, KEY_PORT);
+    nvs_erase_key(h, KEY_APIKEY);
+    nvs_commit(h);
+    nvs_close(h);
+    return ESP_OK;
+}

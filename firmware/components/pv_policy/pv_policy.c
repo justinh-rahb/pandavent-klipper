@@ -132,3 +132,14 @@ esp_err_t pv_policy_set_manual_target(pv_motor_target_t t)
 }
 
 pv_motor_target_t pv_policy_get_target(void) { return s_current_target; }
+
+esp_err_t pv_policy_clear(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+    nvs_erase_key(h, KEY_MODE);
+    nvs_commit(h);
+    nvs_close(h);
+    return ESP_OK;
+}
