@@ -30,7 +30,8 @@ Firmware image segment layout (from `esptool image-info`):
 
 | Function | GPIO | Peripheral | Source |
 |----------|------|-----------|--------|
-| **User Button (with LED)** | GPIO 12 | GPIO input + LED output | BTT User Manual |
+| **User Button (switch)** | GPIO 12 | GPIO input (pull-up, active-low) | BTT User Manual + stock disassembly |
+| **User Button LED**     | GPIO 27 | GPIO output (active-high; steady = auto, blink = manual) | Stock disassembly (`gpio_config_t` at 0x3f417100 targets pin_bit_mask 0x08000000) |
 | **BOOT Button** | GPIO 0 | GPIO input (factory reset) | BTT User Manual |
 
 ### Confirmed (from Ghidra disassembly — see `analysis/`)
