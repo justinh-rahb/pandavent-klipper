@@ -30,10 +30,22 @@ static const char *TAG = "pv_motor";
 #define TICK_MS             10                  // task loop period
 
 // Hall ADC thresholds — from motor_adc.c decompilation.
-#define HALL_CLOSED_LO      0x280
-#define HALL_CLOSED_HI      0x3c0
-#define HALL_OPEN_LO        0x550
-#define HALL_OPEN_HI        0x690
+//
+// Stock's hall_get_state (FUN_400deb24) returns:
+//   raw ∈ [0x280, 0x3c0) → state 1 → OPEN endpoint  (fan-on target)
+//   raw ∈ [0x550, 0x690) → state 2 → CLOSED endpoint (fan-off target)
+//   raw + (-2080) < 0x173 → state 3 → "over-closed" (past mechanical stop)
+//   otherwise            → state 4 → in transit
+//
+// The 2026-07-07 field test caught these labels inverted in our earlier
+// commit — motors drove correctly but the "arrived" check waited for the
+// wrong hall value, so it never fired and the retry loop chewed for a
+// second before giving up. Ranges here are what the physical vent actually
+// reports at each endpoint.
+#define HALL_OPEN_LO        0x280
+#define HALL_OPEN_HI        0x3c0
+#define HALL_CLOSED_LO      0x550
+#define HALL_CLOSED_HI      0x690
 #define HALL_MID_LOW_TEST   0x173
 #define HALL_MID_OFFSET     (-2080)             // signed; 0xfffff7e0 as int32
 

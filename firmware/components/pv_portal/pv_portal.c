@@ -168,6 +168,23 @@ static esp_err_t send_head(httpd_req_t *req)
 "nav.tabs a:hover{background:#f4f4f4;color:#222}"
 ".tab{display:none}.tab:target{display:block}"
 "#home{display:block}.tab:target~#home{display:none}"
+// Dark mode. Follows the browser / OS preference — no toggle in the UI, so
+// nothing extra for the user to persist. Everything's on --prefixed CSS
+// variables to keep the light-mode rules above untouched.
+"@media(prefers-color-scheme:dark){"
+  "body{background:#111;color:#e6e6e6}"
+  "h2{border-bottom-color:#333}"
+  "label,.radios label{color:#aaa}"
+  ".hint{color:#888}"
+  "input,select{background:#1c1c1c;color:#e6e6e6;border:1px solid #444}"
+  "button{background:#444;color:#fff}"
+  "button.secondary{background:#2a2a2a;color:#e6e6e6}"
+  ".status{background:#1c1c1c}"
+  "nav.tabs{border-bottom-color:#333}"
+  "nav.tabs a{color:#aaa}"
+  "nav.tabs a:hover{background:#1c1c1c;color:#fff}"
+  "code{background:#1c1c1c;padding:.1em .3em;border-radius:3px}"
+"}"
 "</style></head><body>"
 "<h1>OpenVent</h1>"
 "<nav class=\"tabs\">"

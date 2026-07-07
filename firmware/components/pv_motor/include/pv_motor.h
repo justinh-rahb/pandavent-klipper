@@ -17,12 +17,17 @@ typedef enum {
     PV_MOTOR_TARGET_OPEN,        // drive fwd until hall reads OPEN
 } pv_motor_target_t;
 
+// Discrete hall-sensor state. Values match stock's classifier so the state
+// numbers you see here are the same ones the Ghidra decomp of hall_get_state
+// (FUN_400deb24) returns. Physical mapping is derived from stock's fan-on ↔
+// state 1 = OPEN, fan-off ↔ state 2 = CLOSED chain in the main state machine
+// (FUN_400de55c lines 36-43).
 typedef enum {
-    PV_HALL_INVALID  = 0,        // reading discarded (sensor disconnected)
-    PV_HALL_CLOSED   = 1,        // at closed endpoint
-    PV_HALL_OPEN     = 2,        // at open endpoint
-    PV_HALL_MID_LOW  = 3,        // mid-travel, near closed
-    PV_HALL_MID_HIGH = 4,        // mid-travel, near open
+    PV_HALL_INVALID  = 0,        // sensor disconnected / raw ADC == 0
+    PV_HALL_OPEN     = 1,        // at OPEN endpoint   (raw ADC ~640–961)
+    PV_HALL_CLOSED   = 2,        // at CLOSED endpoint (raw ADC ~1360–1680)
+    PV_HALL_MID_LOW  = 3,        // past-closed / over-travel (raw ADC ~2080–2450)
+    PV_HALL_MID_HIGH = 4,        // catch-all — in transit between endpoints
 } pv_motor_hall_t;
 
 // Initialize the LEDC timer + ADC1, sample the config-detect ADC (GPIO 35) to
