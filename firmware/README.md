@@ -37,16 +37,21 @@ is pushed, or by running the "Firmware Release" workflow manually with a tag.
 
 ### Flashing release artifacts
 
-Releases ship a single merged image (bootloader + partition table + OTA data +
-app, one file) so flashing is a one-liner:
+Each release ships two binaries:
 
-```sh
-python -m pip install esptool   # if you don't already have it
-python -m esptool --chip esp32 -p /dev/tty.usbserial-* -b 460800 \
-  write_flash 0x0 pandavent-klipper.bin
-```
+- **`pandavent-klipper-full.bin`** — bootloader + partition table + OTA data +
+  app, one file. For first-time flashing over USB.
 
-`SHA256SUMS` next to it if you want to verify.
+  ```sh
+  python -m esptool --chip esp32 -p /dev/tty.usbserial-* -b 460800 \
+    write_flash 0x0 pandavent-klipper-full.bin
+  ```
+
+- **`pandavent-klipper-ota.bin`** — app only. Upload via the portal's
+  **OTA firmware update** form on a device that's already running
+  PandaVent-Klipper. No USB cable needed.
+
+`SHA256SUMS` next to them if you want to verify.
 
 ## Layout
 

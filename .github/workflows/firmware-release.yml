@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to create or update, for example v0.1.1"
+        description: "Release tag to create or update, for example v0.2.0"
         required: true
         type: string
 
@@ -37,7 +37,7 @@ jobs:
           target: esp32
           path: firmware
           command: >
-            python -m esptool --chip esp32 merge_bin -o pandavent-klipper.bin
+            python -m esptool --chip esp32 merge_bin -o pandavent-klipper-full.bin
             --flash_mode dio --flash_size 4MB --flash_freq 40m
             0x1000 build/bootloader/bootloader.bin
             0x8000 build/partition_table/partition-table.bin
@@ -48,9 +48,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          mv firmware/pandavent-klipper.bin dist/
+          # Full image: bootloader + partitions + OTA data + app, one shot,
+          # flashed with esptool at offset 0. This is the "first-time" image.
+          mv firmware/pandavent-klipper-full.bin dist/
+          # OTA image: just the app. Upload via the portal's OTA form after
+          # the device is already running an older version of this firmware.
+          cp firmware/build/pandavent_klipper.bin dist/pandavent-klipper-ota.bin
           cd dist
-          sha256sum pandavent-klipper.bin > SHA256SUMS
+          sha256sum pandavent-klipper-full.bin pandavent-klipper-ota.bin > SHA256SUMS
           ls -lh
 
       - name: Publish GitHub release
@@ -61,7 +66,12 @@ jobs:
           set -euo pipefail
 
           cat > release_notes.md <<'NOTES'
-          ## ⚠ Back up your stock firmware first
+          ## Which file do I need?
+
+          - **`pandavent-klipper-full.bin`** — first-time flash of a fresh module. Contains bootloader + partition table + OTA data + app, flashed with `esptool` over USB.
+          - **`pandavent-klipper-ota.bin`** — updating a device that's already running this firmware. Upload via the portal's **OTA firmware update** form.
+
+          ## ⚠ Back up your stock firmware first (only for first-time flashing)
 
           This replaces the stock BTT firmware. There is currently **no signed image to roll back to** — BTT doesn't publish source or release binaries for the Panda Vent. Dump the whole flash before you write over it:
 
@@ -69,9 +79,9 @@ jobs:
           python -m esptool --chip esp32 -p PORT -b 460800 read_flash 0x0 0x400000 stock-panda-vent-backup.bin
           ```
 
-          Keep that file somewhere safe. If you ever want to go back to stock, flash it exactly the same way as the new image (`write_flash 0x0 stock-panda-vent-backup.bin`).
+          Keep that file somewhere safe. To go back to stock, flash it exactly the same way (`write_flash 0x0 stock-panda-vent-backup.bin`).
 
-          ## Flashing
+          ## First-time flash (esptool)
 
           Install esptool:
 
@@ -79,19 +89,26 @@ jobs:
           python -m pip install esptool
           ```
 
-          Put the ESP32 in download mode (most USB devkits do this automatically; on bare modules, hold **BOOT** while pulsing **EN/RST**). Then flash the whole thing in one shot:
+          Put the ESP32 in download mode (most USB devkits do this automatically; on bare modules, hold **BOOT** while pulsing **EN/RST**). Then:
 
           ```
-          python -m esptool --chip esp32 -p PORT -b 460800 write_flash 0x0 pandavent-klipper.bin
+          python -m esptool --chip esp32 -p PORT -b 460800 write_flash 0x0 pandavent-klipper-full.bin
           ```
 
           Replace `PORT` with your serial device (`/dev/tty.usbserial-0001` on macOS, `/dev/ttyUSB0` on Linux, `COM3` on Windows).
 
-          The image already includes the bootloader, partition table, OTA-data slot, and the app — nothing else to download.
+          ## OTA update (from the portal)
 
-          ## First boot
+          If your device is already running PandaVent-Klipper, you can update from a browser without touching USB:
 
-          The device comes up as **`Panda_Vent_XXXX`** (WPA2 hotspot, password `987654321`, matching the stock firmware). Join it, the captive portal will pop, and you can enter your home WiFi + Moonraker printer from there. It also advertises on mDNS as **`PandaVent.local`** once it joins your LAN.
+          1. Load the portal (`http://PandaVent.local/` or the AP IP).
+          2. Scroll to **OTA firmware update**.
+          3. Choose `pandavent-klipper-ota.bin` and hit **Upload & flash**.
+          4. The device writes to the inactive OTA slot, swaps the boot pointer, and reboots into the new version.
+
+          ## First boot after full-flash
+
+          The device comes up as **`Panda_Vent_XXXX`** (WPA2 hotspot, password `987654321`). Join it, the captive portal will pop, and you can enter your home WiFi + Moonraker printer from there. It also advertises on mDNS as **`PandaVent.local`** once it joins your LAN.
 
           ## Verify download
 

@@ -8,6 +8,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -375,6 +376,38 @@ static esp_err_t send_danger_section(httpd_req_t *req)
         "</form>");
 }
 
+// OTA upload uses a tiny JS shim so we can POST the file as
+// application/octet-stream and skip multipart parsing on the ESP side. Works
+// without JS enabled the browser will just show the form and the button will
+// do nothing — acceptable for a modern config UI.
+static esp_err_t send_ota_section(httpd_req_t *req)
+{
+    return SEND(req,
+        "<h2>OTA firmware update</h2>"
+        "<div class=\"hint\">Upload a <code>pandavent-klipper-ota.bin</code> from the releases page. The full-flash image (<code>-full.bin</code>) is only for esptool — don't upload it here.</div>"
+        "<form id=\"ota\" onsubmit=\"return uploadOta(event)\">"
+          "<label>Firmware file</label>"
+          "<input type=\"file\" id=\"otafile\" accept=\".bin\" required>"
+          "<button>Upload &amp; flash</button>"
+        "</form>"
+        "<div id=\"otaStatus\" class=\"hint\"></div>"
+        "<script>"
+        "async function uploadOta(e){"
+          "e.preventDefault();"
+          "const f=document.getElementById('otafile').files[0];"
+          "const s=document.getElementById('otaStatus');"
+          "if(!f)return false;"
+          "s.textContent='Uploading '+f.name+' ('+f.size+' bytes)…';"
+          "try{"
+            "const r=await fetch('/ota',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f});"
+            "if(r.ok){s.innerHTML='<b>Success — rebooting.</b>'}"
+            "else{s.textContent='Failed: '+await r.text()}"
+          "}catch(err){s.textContent='Failed: '+err.message}"
+          "return false;"
+        "}"
+        "</script>");
+}
+
 static esp_err_t handle_root(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
@@ -384,6 +417,7 @@ static esp_err_t handle_root(httpd_req_t *req)
     send_moonraker_section(req);
     send_mode_section(req);
     send_ap_section(req);
+    send_ota_section(req);
     send_danger_section(req);
     SEND(req, "</body></html>");
     httpd_resp_send_chunk(req, NULL, 0);   // terminate chunked stream
@@ -518,6 +552,70 @@ static esp_err_t handle_vent_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t handle_ota_post(httpd_req_t *req)
+{
+    const esp_partition_t *upd = esp_ota_get_next_update_partition(NULL);
+    if (upd == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "no OTA partition available");
+        return ESP_OK;
+    }
+    ESP_LOGI(TAG, "OTA start (target=%s, size=%d)", upd->label, req->content_len);
+
+    esp_ota_handle_t update = 0;
+    esp_err_t err = esp_ota_begin(upd, OTA_WITH_SEQUENTIAL_WRITES, &update);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            esp_err_to_name(err));
+        return ESP_OK;
+    }
+
+    // Static so we don't put 1 KB on the httpd task's stack.
+    static char rx[1024];
+    int remaining = req->content_len;
+    while (remaining > 0) {
+        int n = httpd_req_recv(req, rx, sizeof(rx));
+        if (n <= 0) {
+            if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            ESP_LOGE(TAG, "recv failed at %d bytes remaining", remaining);
+            esp_ota_abort(update);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed");
+            return ESP_OK;
+        }
+        err = esp_ota_write(update, rx, n);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write: %s", esp_err_to_name(err));
+            esp_ota_abort(update);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                esp_err_to_name(err));
+            return ESP_OK;
+        }
+        remaining -= n;
+    }
+
+    err = esp_ota_end(update);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            esp_err_to_name(err));
+        return ESP_OK;
+    }
+    err = esp_ota_set_boot_partition(upd);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            esp_err_to_name(err));
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "OTA success — rebooting into %s", upd->label);
+    httpd_resp_sendstr(req, "OK");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;   // unreachable
+}
+
 static esp_err_t handle_factory_reset_post(httpd_req_t *req)
 {
     ESP_LOGW(TAG, "factory reset requested from portal");
@@ -604,6 +702,7 @@ esp_err_t pv_portal_start(void)
     httpd_uri_t mode  = { .uri = "/mode",       .method = HTTP_POST, .handler = handle_mode_post };
     httpd_uri_t apcfg = { .uri = "/ap_config",  .method = HTTP_POST, .handler = handle_ap_post };
     httpd_uri_t vent  = { .uri = "/vent",       .method = HTTP_POST, .handler = handle_vent_post };
+    httpd_uri_t ota   = { .uri = "/ota",        .method = HTTP_POST, .handler = handle_ota_post };
     httpd_uri_t reset = { .uri = "/factory_reset", .method = HTTP_POST, .handler = handle_factory_reset_post };
     httpd_register_uri_handler(s_httpd, &root);
     httpd_register_uri_handler(s_httpd, &wifi);
@@ -612,6 +711,7 @@ esp_err_t pv_portal_start(void)
     httpd_register_uri_handler(s_httpd, &mode);
     httpd_register_uri_handler(s_httpd, &apcfg);
     httpd_register_uri_handler(s_httpd, &vent);
+    httpd_register_uri_handler(s_httpd, &ota);
     httpd_register_uri_handler(s_httpd, &reset);
 
     // Kick off an initial WiFi scan so the SSID dropdown has entries by the
