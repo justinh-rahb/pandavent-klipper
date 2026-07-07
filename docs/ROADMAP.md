@@ -44,20 +44,32 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
 - [x] Read hardware-config ADC on GPIO 35 to pick 0/2/4 active motor groups
 
 ### Remaining Core Verification
-Verified on a bare ESP32 devkit (no vent hardware attached):
+
+Verified on a bare ESP32 devkit:
 - [x] Boots cleanly, no panics
 - [x] LED (GPIO 27) driven correctly when policy mode changes
 - [x] Portal reachable from a phone in both AP and STA modes
 - [x] Captive portal detection triggers on iOS / Android
 - [x] WiFi scan populates the SSID dropdown
 - [x] mDNS `OpenVent.local` resolves on the LAN
-- [x] Config-detect ADC reports 0 groups on the bare board (unpopulated pin)
+- [x] Config-detect ADC reports 0 groups on a bare board (unpopulated pin)
+- [x] OTA upload from the portal writes to the inactive slot and reboots into it
 
-Still needs actual Panda Vent hardware:
-- [ ] Motors respond and hall ADC reads are plausible
+Verified on real Panda Vent hardware (2026-07-07 field test — [notes](testing/2026-07-07-field-test-notes.md)):
+- [x] `openvent install` flashes cleanly over USB
+- [x] `openvent backup` + `openvent restore` round-trips the stock image
+- [x] Captive portal + WiFi provisioning workflow
+- [x] Motor drive direction correct — vents physically open on command
+- [x] Hall sensors report values (endpoint bands were mislabeled — fixed in v0.2.1)
+- [x] Stock firmware restore is fully non-destructive
+
+Still to verify on hardware:
+- [ ] "Arrived at endpoint" detection works with the corrected hall labels (motor stops instead of chugging into the retry loop)
+- [ ] Vents close on command (was blocked by same label bug)
 - [ ] Confirm which mainboard chain maps to motor groups 0/1 vs 2/3
-- [ ] Confirm the 3-way config-detect ADC bands hit the expected raw values
+- [ ] Confirm the 3-way config-detect ADC bands hit the expected raw values on the retail 2-vent kit
 - [ ] WS2812 outputs light up on the LED boards
+- [ ] Root-cause the intermittent AP dropouts observed during the field session
 
 ## Phase 2 — Firmware Parity (Web UI & Settings)
 
@@ -67,6 +79,7 @@ To match the stock BTT firmware capabilities, the following features must be imp
 - [x] Tabbed layout — Home / WiFi / Printer / System (CSS-only, no JS)
 - [x] Persistent status card — firmware version, WiFi state + IP + RSSI, Moonraker state, printer state, bed temp, vent target, mode
 - [x] Quick-action Open / Close vent buttons on Home (same effect as short-press on the physical button)
+- [x] Dark mode via `prefers-color-scheme` (no toggle — follows OS setting)
 
 ### Wi-Fi Page Parity
 - [x] Network scanner + selectable SSID dropdown (`pv_wifi_scan_start`)

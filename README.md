@@ -51,15 +51,21 @@ autodetect doesn't find the right port.)
 
 ## Status
 
-**Working on a real ESP32 devkit, no vent module attached yet.**
+**First real-hardware field test happened on 2026-07-07**
+([notes](docs/testing/2026-07-07-field-test-notes.md)). First-time flash,
+UI, captive portal, and stock-firmware restore all worked. Motors drove
+in the correct direction but the "arrived at endpoint" check was fooled
+by inverted hall thresholds — fixed in v0.2.1 pending re-verification.
 
-- ✅ Firmware compiles + boots against ESP-IDF v5.3+
+- ✅ Firmware flashes on real Panda Vent hardware; `openvent` script for
+  backup / restore / install works end-to-end
 - ✅ WiFi station + AP fallback, mDNS `OpenVent.local`, captive portal
-- ✅ Portal: tabbed UI, live status, WiFi setup, Moonraker config, OTA upload, factory reset
+- ✅ Portal: tabbed UI, live status, WiFi setup, Moonraker config, OTA upload, factory reset, dark mode
 - ✅ Moonraker WebSocket client with `print_stats` + `heater_bed` subscriptions
 - ✅ Physical button and status LED wired to the mode state machine
-- ✅ Config-detect ADC returns 0 groups on a bare board — hot-plug ready
-- ⬜ Not yet verified: motors, hall sensors, WS2812 outputs (needs actual vent hardware)
+- ✅ Motors drive in the correct direction on real hardware; vents physically open on command
+- ⏳ Hall-endpoint detection labels corrected 2026-07-07 (v0.2.1) — re-verification pending
+- ⬜ Not yet verified on hardware: WS2812 outputs, exact ADC bands for the config-detect line
 
 [![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/wildtang3nt)
 
