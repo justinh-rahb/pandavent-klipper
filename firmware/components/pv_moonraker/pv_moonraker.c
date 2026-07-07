@@ -11,7 +11,8 @@
 #include "lwip/sockets.h"
 #include "nvs.h"
 
-#include <fcntl.h>
+#include <errno.h>
+#include <sys/ioctl.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -364,6 +365,12 @@ static void discover_task(void *arg)
 
     uint16_t port = s_cfg.port ? s_cfg.port : DEFAULT_PORT;
     int hits = 0;
+    int attempts = 0, skipped_alloc = 0, immediate_fails = 0;
+    int last_errno = 0;
+
+    ESP_LOGI(TAG, "subnet scan: %u.%u.%u.0/24 port %u",
+             (unsigned)(host_ip >> 24 & 0xFF), (unsigned)(host_ip >> 16 & 0xFF),
+             (unsigned)(host_ip >> 8 & 0xFF), (unsigned)port);
 
     // Skip the network and broadcast addresses at each end.
     for (uint32_t ip = subnet + 1; ip < broadcast && hits < PV_MOONRAKER_DISCOVER_MAX;) {
@@ -373,11 +380,13 @@ static void discover_task(void *arg)
 
         for (; ip < broadcast && n < SCAN_BATCH_SIZE; ip++) {
             if (ip == host_ip) continue;   // don't probe ourselves
+            attempts++;
 
             int fd = socket(AF_INET, SOCK_STREAM, 0);
-            if (fd < 0) continue;
-            int fl = fcntl(fd, F_GETFL, 0);
-            fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+            if (fd < 0) { skipped_alloc++; continue; }
+            // ioctl FIONBIO is more reliable on lwip than fcntl.
+            int flag = 1;
+            ioctl(fd, FIONBIO, &flag);
 
             struct sockaddr_in addr = {
                 .sin_family      = AF_INET,
@@ -385,11 +394,16 @@ static void discover_task(void *arg)
                 .sin_addr.s_addr = htonl(ip),
             };
             int r = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
-            if (r == 0 || (r < 0 && errno == EINPROGRESS)) {
+            // Accept anything that isn't an immediate hard failure. Notably
+            // EINPROGRESS / EWOULDBLOCK / EAGAIN all mean "SYN sent, waiting".
+            if (r == 0 || errno == EINPROGRESS || errno == EWOULDBLOCK ||
+                errno == EAGAIN || errno == 0) {
                 fds[n] = fd;
                 ips[n] = ip;
                 n++;
             } else {
+                last_errno = errno;
+                immediate_fails++;
                 close(fd);
             }
         }
@@ -421,7 +435,9 @@ static void discover_task(void *arg)
     s_discover_count = hits;
     s_discovering    = false;
     xSemaphoreGive(s_discover_lock);
-    ESP_LOGI(TAG, "subnet scan done: %d responder(s) on :%u", hits, (unsigned)port);
+    ESP_LOGI(TAG, "subnet scan done: %d responder(s) on :%u"
+                  " (attempts=%d, alloc_fail=%d, immediate_err=%d, last_errno=%d)",
+             hits, (unsigned)port, attempts, skipped_alloc, immediate_fails, last_errno);
     vTaskDelete(NULL);
 }
 

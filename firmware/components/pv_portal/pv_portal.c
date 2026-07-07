@@ -574,10 +574,11 @@ esp_err_t pv_portal_start(void)
     httpd_register_uri_handler(s_httpd, &apcfg);
     httpd_register_uri_handler(s_httpd, &disc);
 
-    // Kick off initial background scan + mDNS discovery so the dropdowns
-    // have entries by the time the user loads the page.
+    // Kick off an initial WiFi scan so the SSID dropdown has entries by the
+    // time the user loads the page. Skip Moonraker discovery — that's a
+    // 250-way TCP-connect sweep of the LAN and would race the WS client's
+    // connect attempt at boot. User triggers it explicitly via "Rescan".
     pv_wifi_scan_start();
-    pv_moonraker_discover_start();
 
     if (s_ap_mode) {
         uint32_t ip = get_ap_gateway_ip();
