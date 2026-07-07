@@ -149,7 +149,8 @@ static esp_err_t send_head(httpd_req_t *req)
 "<title>PandaVent</title>"
 "<style>"
 "body{font-family:sans-serif;max-width:520px;margin:1em auto;padding:0 1em;color:#222}"
-"h1{font-size:1.3em}h2{font-size:1.05em;margin-top:1.6em;border-bottom:1px solid #ddd;padding-bottom:.2em}"
+"h1{font-size:1.3em;margin-bottom:.2em}"
+"h2{font-size:1.05em;margin-top:1.6em;border-bottom:1px solid #ddd;padding-bottom:.2em}"
 "label{display:block;margin:.7em 0 .2em;font-size:.9em;color:#555}"
 "input,button,select{width:100%;padding:.55em;font-size:1em;box-sizing:border-box}"
 "button{margin-top:1em;background:#222;color:#fff;border:0;border-radius:4px;cursor:pointer}"
@@ -160,8 +161,21 @@ static esp_err_t send_head(httpd_req_t *req)
 ".radios label{display:inline-block;margin-right:1em;font-size:1em;color:#222}"
 ".radios input{width:auto;margin-right:.3em}"
 ".hint{color:#666;font-size:.85em;margin-top:.2em}"
+// Tab nav. CSS-only: sections default hidden, :target shows one, #home is
+// shown by default and hidden if any earlier sibling is :target.
+"nav.tabs{display:flex;gap:.2em;border-bottom:1px solid #ddd;margin:1em 0}"
+"nav.tabs a{padding:.6em 1em;text-decoration:none;color:#666;border-radius:4px 4px 0 0}"
+"nav.tabs a:hover{background:#f4f4f4;color:#222}"
+".tab{display:none}.tab:target{display:block}"
+"#home{display:block}.tab:target~#home{display:none}"
 "</style></head><body>"
-"<h1>PandaVent</h1>";
+"<h1>PandaVent</h1>"
+"<nav class=\"tabs\">"
+  "<a href=\"#home\">Home</a>"
+  "<a href=\"#wifi\">WiFi</a>"
+  "<a href=\"#printer\">Printer</a>"
+  "<a href=\"#system\">System</a>"
+"</nav>";
     return SEND(req, HEAD);
 }
 
@@ -412,13 +426,30 @@ static esp_err_t handle_root(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
     send_head(req);
-    send_status(req);
+
+    // Order matters: for the CSS `.tab:target ~ #home` trick to hide #home
+    // when another tab is selected, #home has to appear LAST among the tabs
+    // in DOM order (adjacent-sibling selector only reaches later siblings).
+
+    SEND(req, "<section id=\"wifi\" class=\"tab\">");
     send_wifi_section(req);
-    send_moonraker_section(req);
-    send_mode_section(req);
     send_ap_section(req);
+    SEND(req, "</section>");
+
+    SEND(req, "<section id=\"printer\" class=\"tab\">");
+    send_moonraker_section(req);
+    SEND(req, "</section>");
+
+    SEND(req, "<section id=\"system\" class=\"tab\">");
     send_ota_section(req);
     send_danger_section(req);
+    SEND(req, "</section>");
+
+    SEND(req, "<section id=\"home\" class=\"tab\">");
+    send_status(req);
+    send_mode_section(req);
+    SEND(req, "</section>");
+
     SEND(req, "</body></html>");
     httpd_resp_send_chunk(req, NULL, 0);   // terminate chunked stream
     return ESP_OK;
@@ -461,7 +492,7 @@ static esp_err_t handle_scan_post(httpd_req_t *req)
     // results without an extra manual refresh.
     vTaskDelay(pdMS_TO_TICKS(2500));
     httpd_resp_set_status(req, "303 See Other");
-    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_set_hdr(req, "Location", "/#wifi");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -497,7 +528,7 @@ static esp_err_t handle_moonraker_post(httpd_req_t *req)
         return ESP_OK;
     }
     httpd_resp_set_status(req, "303 See Other");
-    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_set_hdr(req, "Location", "/#printer");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -523,7 +554,7 @@ static esp_err_t handle_mode_post(httpd_req_t *req)
         pv_policy_set_mode(PV_POLICY_MODE_AUTO);
     }
     httpd_resp_set_status(req, "303 See Other");
-    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_set_hdr(req, "Location", "/#home");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -547,7 +578,7 @@ static esp_err_t handle_vent_post(httpd_req_t *req)
     pv_policy_set_manual_target(t);
     pv_policy_set_mode(PV_POLICY_MODE_MANUAL);
     httpd_resp_set_status(req, "303 See Other");
-    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_set_hdr(req, "Location", "/#home");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
