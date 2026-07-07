@@ -26,6 +26,7 @@ static const char *TAG = "pv_wifi";
 #define KEY_AP_SSID "ap_ssid"
 #define KEY_AP_PASS "ap_pass"
 #define KEY_AP_IP   "ap_ip"
+#define KEY_AP_EN   "ap_enabled"
 
 #define STA_MAX_RETRIES  5
 #define BIT_CONNECTED    BIT0
@@ -130,9 +131,13 @@ static void load_ap_config(pv_wifi_ap_config_t *out)
         uint32_t ip = 0;
         if (nvs_get_u32(h, KEY_AP_IP, &ip) != ESP_OK || ip == 0) ip = DEFAULT_AP_IP;
         out->ip = ip;
+        uint8_t en = 1;
+        if (nvs_get_u8(h, KEY_AP_EN, &en) != ESP_OK) en = 1;   // default on
+        out->enabled = (en != 0);
         nvs_close(h);
     } else {
         out->ip = DEFAULT_AP_IP;
+        out->enabled = true;
     }
 }
 
@@ -307,13 +312,19 @@ esp_err_t pv_wifi_start(void)
         EventBits_t bits = xEventGroupWaitBits(
             s_events, BIT_CONNECTED | BIT_FAILED, pdFALSE, pdFALSE,
             pdMS_TO_TICKS(30000));
-        // Anything other than "connected" means we're not on a network — even
-        // a plain timeout with no BIT_FAILED. Fall back to the AP portal so
-        // the user has a way to fix the config.
         if (!(bits & BIT_CONNECTED)) {
-            ESP_LOGW(TAG, "STA never came up (bits=0x%x) — falling back to AP",
-                     (unsigned)bits);
-            start_ap_mode();
+            pv_wifi_ap_config_t ap_cfg;
+            load_ap_config(&ap_cfg);
+            if (ap_cfg.enabled) {
+                ESP_LOGW(TAG, "STA never came up (bits=0x%x) — falling back to AP",
+                         (unsigned)bits);
+                start_ap_mode();
+            } else {
+                ESP_LOGW(TAG, "STA never came up; AP fallback is disabled — "
+                              "letting the driver keep retrying in the background");
+                // Leave s_state == STA_CONNECTING; the wifi driver will keep
+                // its own auto-reconnect running.
+            }
         }
     } else {
         ESP_LOGI(TAG, "no saved WiFi credentials");
@@ -418,6 +429,7 @@ esp_err_t pv_wifi_set_ap_config_and_reboot(const pv_wifi_ap_config_t *cfg)
     else                          nvs_set_str(h, KEY_AP_PASS, cfg->password);
     if (cfg->ip == 0) nvs_erase_key(h, KEY_AP_IP);
     else              nvs_set_u32(h, KEY_AP_IP, cfg->ip);
+    nvs_set_u8(h, KEY_AP_EN, cfg->enabled ? 1 : 0);
     err = nvs_commit(h);
     nvs_close(h);
     if (err != ESP_OK) return err;

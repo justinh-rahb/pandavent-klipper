@@ -4,9 +4,12 @@
 #include "pv_policy.h"
 #include "pv_wifi.h"
 
+#include "esp_app_desc.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_system.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/inet.h"
@@ -161,20 +164,50 @@ static esp_err_t send_head(httpd_req_t *req)
     return SEND(req, HEAD);
 }
 
+// Extra network detail — STA IP if connected, RSSI, AP IP if serving. Blank
+// strings if not applicable.
+static void gather_wifi_detail(char *wifi_line, size_t wifi_sz)
+{
+    pv_wifi_state_t st = pv_wifi_state();
+    if (st == PV_WIFI_STATE_STA_CONNECTED) {
+        esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        esp_netif_ip_info_t info = {0};
+        if (sta) esp_netif_get_ip_info(sta, &info);
+        wifi_ap_record_t ap;
+        int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
+        snprintf(wifi_line, wifi_sz, "connected · " IPSTR " · %d dBm",
+                 IP2STR(&info.ip), rssi);
+    } else if (st == PV_WIFI_STATE_AP_PORTAL) {
+        esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+        esp_netif_ip_info_t info = {0};
+        if (ap) esp_netif_get_ip_info(ap, &info);
+        snprintf(wifi_line, wifi_sz, "AP mode · " IPSTR, IP2STR(&info.ip));
+    } else {
+        snprintf(wifi_line, wifi_sz, "%s", wifi_label(st));
+    }
+}
+
 static esp_err_t send_status(httpd_req_t *req)
 {
     pv_moonraker_status_t mk;
     pv_moonraker_get_status(&mk);
-    char buf[512];
+    const esp_app_desc_t *app = esp_app_get_description();
+
+    char wifi_line[96];
+    gather_wifi_detail(wifi_line, sizeof(wifi_line));
+
+    char buf[768];
     snprintf(buf, sizeof(buf),
         "<div class=\"status\">"
+        "<div><b>Firmware:</b> %s</div>"
         "<div><b>WiFi:</b> %s</div>"
         "<div><b>Moonraker:</b> %s</div>"
         "<div><b>Printer state:</b> %s (bed %.1f\xC2\xB0""C)</div>"
         "<div><b>Vent target:</b> %s</div>"
         "<div><b>Mode:</b> %s</div>"
         "</div>",
-        wifi_label(pv_wifi_state()),
+        app->version,
+        wifi_line,
         mk_label(mk.state),
         mk.printing ? "printing" : "idle",
         mk.bed_temp,
@@ -260,10 +293,25 @@ static esp_err_t send_mode_section(httpd_req_t *req)
 {
     bool manual = pv_policy_get_mode() == PV_POLICY_MODE_MANUAL;
     pv_motor_target_t target = pv_policy_get_target();
-    char buf[800];
+    char buf[1200];
     snprintf(buf, sizeof(buf),
         "<h2>Mode</h2>"
-        "<form method=\"POST\" action=\"/mode\">"
+        // Quick-action buttons: each posts to /vent with a hidden target.
+        // Same effect as short-pressing the physical button — switches to
+        // MANUAL and drives to that state.
+        "<label>Quick action</label>"
+        "<div class=\"row\">"
+          "<form method=\"POST\" action=\"/vent\" style=\"flex:1\">"
+            "<input type=\"hidden\" name=\"target\" value=\"open\">"
+            "<button>Open vent</button>"
+          "</form>"
+          "<form method=\"POST\" action=\"/vent\" style=\"flex:1\">"
+            "<input type=\"hidden\" name=\"target\" value=\"closed\">"
+            "<button>Close vent</button>"
+          "</form>"
+        "</div>"
+
+        "<form method=\"POST\" action=\"/mode\" style=\"margin-top:1em\">"
         "<div class=\"radios\">"
           "<label><input type=\"radio\" name=\"mode\" value=\"auto\"%s>Auto</label>"
           "<label><input type=\"radio\" name=\"mode\" value=\"manual\"%s>Manual</label>"
@@ -290,11 +338,16 @@ static esp_err_t send_ap_section(httpd_req_t *req)
     html_escape(ap.ssid,     ssid_esc, sizeof(ssid_esc));
     html_escape(ap.password, pass_esc, sizeof(pass_esc));
 
-    char buf[900];
+    char buf[1200];
     snprintf(buf, sizeof(buf),
         "<h2>AP Hotspot</h2>"
         "<form method=\"POST\" action=\"/ap_config\">"
         "<div class=\"hint\">Used when there's no saved WiFi or the saved network is unreachable. Saving reboots.</div>"
+        "<label style=\"margin-top:1em\">"
+          "<input type=\"checkbox\" name=\"ap_enabled\" value=\"1\" style=\"width:auto;margin-right:.5em\"%s>"
+          "Allow AP fallback when WiFi is down"
+        "</label>"
+        "<div class=\"hint\">If unchecked, the device won't expose an AP even when it can't reach your WiFi. If you lose WiFi you'll need serial access or a BOOT-button factory reset to recover.</div>"
         "<label>SSID</label><input name=\"ap_ssid\" value=\"%s\" maxlength=\"32\">"
         "<label>Password (blank = keep, min 8 chars for WPA2)</label>"
         "<input name=\"ap_password\" value=\"%s\" maxlength=\"63\">"
@@ -302,12 +355,24 @@ static esp_err_t send_ap_section(httpd_req_t *req)
         "<input name=\"ap_ip\" value=\"%u.%u.%u.%u\" maxlength=\"15\">"
         "<button>Save AP &amp; reboot</button>"
         "</form>",
+        ap.enabled ? " checked" : "",
         ssid_esc, pass_esc,
         (unsigned)((ap.ip >> 24) & 0xFF),
         (unsigned)((ap.ip >> 16) & 0xFF),
         (unsigned)((ap.ip >>  8) & 0xFF),
         (unsigned)( ap.ip        & 0xFF));
     return SEND(req, buf);
+}
+
+static esp_err_t send_danger_section(httpd_req_t *req)
+{
+    return SEND(req,
+        "<h2 style=\"color:#a33\">Danger zone</h2>"
+        "<form method=\"POST\" action=\"/factory_reset\""
+        " onsubmit=\"return confirm('Wipe all saved settings and reboot?');\">"
+        "<div class=\"hint\">Clears WiFi, Moonraker, and mode config from NVS, then reboots. Same as holding the BOOT button on the module for 3 seconds.</div>"
+        "<button style=\"background:#a33\">Factory reset</button>"
+        "</form>");
 }
 
 static esp_err_t handle_root(httpd_req_t *req)
@@ -319,6 +384,7 @@ static esp_err_t handle_root(httpd_req_t *req)
     send_moonraker_section(req);
     send_mode_section(req);
     send_ap_section(req);
+    send_danger_section(req);
     SEND(req, "</body></html>");
     httpd_resp_send_chunk(req, NULL, 0);   // terminate chunked stream
     return ESP_OK;
@@ -428,6 +494,44 @@ static esp_err_t handle_mode_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t handle_vent_post(httpd_req_t *req)
+{
+    char body[64];
+    if (recv_body(req, body, sizeof(body)) < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+        return ESP_OK;
+    }
+    char target[16] = {0};
+    if (form_get(body, "target", target, sizeof(target)) != 0 || target[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing target");
+        return ESP_OK;
+    }
+    pv_motor_target_t t = strcmp(target, "open") == 0 ? PV_MOTOR_TARGET_OPEN
+                                                     : PV_MOTOR_TARGET_CLOSED;
+    // Same semantics as the physical button short-press: force MANUAL and
+    // drive to the chosen state.
+    pv_policy_set_manual_target(t);
+    pv_policy_set_mode(PV_POLICY_MODE_MANUAL);
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t handle_factory_reset_post(httpd_req_t *req)
+{
+    ESP_LOGW(TAG, "factory reset requested from portal");
+    pv_wifi_clear_creds();
+    pv_moonraker_clear_config();
+    pv_policy_clear();
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_sendstr(req,
+        "<!DOCTYPE html><body><h1>Factory reset. Rebooting…</h1></body>");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;   // unreachable
+}
+
 static esp_err_t handle_ap_post(httpd_req_t *req)
 {
     char body[512];
@@ -436,10 +540,13 @@ static esp_err_t handle_ap_post(httpd_req_t *req)
         return ESP_OK;
     }
     pv_wifi_ap_config_t cfg = {0};
-    char ap_ssid[33] = {0}, ap_pass[65] = {0}, ap_ip[32] = {0};
+    char ap_ssid[33] = {0}, ap_pass[65] = {0}, ap_ip[32] = {0}, ap_en[4] = {0};
     form_get(body, "ap_ssid",     ap_ssid, sizeof(ap_ssid));
     form_get(body, "ap_password", ap_pass, sizeof(ap_pass));
     form_get(body, "ap_ip",       ap_ip,   sizeof(ap_ip));
+    // HTML checkboxes only submit when checked. Presence of the field means
+    // enabled; absence means disabled.
+    cfg.enabled = (form_get(body, "ap_enabled", ap_en, sizeof(ap_en)) == 0);
 
     // Empty inputs mean "revert to default" for that field.
     strncpy(cfg.ssid,     ap_ssid, sizeof(cfg.ssid) - 1);
@@ -496,12 +603,16 @@ esp_err_t pv_portal_start(void)
     httpd_uri_t mk    = { .uri = "/moonraker",  .method = HTTP_POST, .handler = handle_moonraker_post };
     httpd_uri_t mode  = { .uri = "/mode",       .method = HTTP_POST, .handler = handle_mode_post };
     httpd_uri_t apcfg = { .uri = "/ap_config",  .method = HTTP_POST, .handler = handle_ap_post };
+    httpd_uri_t vent  = { .uri = "/vent",       .method = HTTP_POST, .handler = handle_vent_post };
+    httpd_uri_t reset = { .uri = "/factory_reset", .method = HTTP_POST, .handler = handle_factory_reset_post };
     httpd_register_uri_handler(s_httpd, &root);
     httpd_register_uri_handler(s_httpd, &wifi);
     httpd_register_uri_handler(s_httpd, &scan);
     httpd_register_uri_handler(s_httpd, &mk);
     httpd_register_uri_handler(s_httpd, &mode);
     httpd_register_uri_handler(s_httpd, &apcfg);
+    httpd_register_uri_handler(s_httpd, &vent);
+    httpd_register_uri_handler(s_httpd, &reset);
 
     // Kick off an initial WiFi scan so the SSID dropdown has entries by the
     // time the user loads the page.

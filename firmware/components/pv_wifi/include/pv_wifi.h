@@ -24,6 +24,9 @@ typedef struct {
     char     ssid[33];      // "" → default Panda_Vent_XXXX
     char     password[65];  // "" → default 987654321 (WPA2-PSK requires ≥ 8 chars)
     uint32_t ip;            // host byte order; 0 → default 192.168.4.1
+    bool     enabled;       // false = don't fall back to AP if STA fails
+                            // (still start AP if there are no saved STA creds
+                            // at all — otherwise the device is unrecoverable)
 } pv_wifi_ap_config_t;
 
 #define PV_WIFI_SCAN_MAX 20
