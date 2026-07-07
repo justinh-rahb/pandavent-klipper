@@ -40,3 +40,18 @@ esp_err_t pv_moonraker_get_status(pv_moonraker_status_t *out);
 
 // Wipe saved Moonraker config. Used for factory reset.
 esp_err_t pv_moonraker_clear_config(void);
+
+// mDNS discovery of Moonraker services on the LAN (_moonraker._tcp). Results
+// land in a small in-memory cache. Same async pattern as pv_wifi_scan_start —
+// spawn, wait a couple seconds, then read the cache.
+#define PV_MOONRAKER_DISCOVER_MAX 8
+
+typedef struct {
+    char     hostname[64];   // e.g. "mainsailos.local" — for display
+    char     ip[16];         // dotted-quad IPv4 — what we actually use
+    uint16_t port;
+} pv_moonraker_service_t;
+
+esp_err_t pv_moonraker_discover_start(void);
+bool      pv_moonraker_is_discovering(void);
+int       pv_moonraker_get_discovered(pv_moonraker_service_t *out, int max);

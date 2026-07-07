@@ -2,10 +2,12 @@
 
 #include "cJSON.h"
 #include "esp_log.h"
+#include "esp_netif_ip_addr.h"
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "mdns.h"
 #include "nvs.h"
 
 #include <stdio.h>
@@ -30,6 +32,13 @@ static pv_moonraker_config_t     s_cfg   = {0};
 static pv_moonraker_status_t     s_status = { .state = PV_MK_DISABLED };
 static char                     *s_rx_buf = NULL;
 static size_t                    s_rx_off = 0;
+
+// mDNS discovery — its own lock so a discovery in flight can't stall the WS
+// receive path.
+static SemaphoreHandle_t       s_discover_lock = NULL;
+static pv_moonraker_service_t  s_discover_cache[PV_MOONRAKER_DISCOVER_MAX];
+static int                     s_discover_count = 0;
+static bool                    s_discovering    = false;
 
 // ---------- NVS ----------
 
@@ -238,6 +247,8 @@ esp_err_t pv_moonraker_start(void)
     if (s_lock != NULL) return ESP_ERR_INVALID_STATE;
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) return ESP_ERR_NO_MEM;
+    s_discover_lock = xSemaphoreCreateMutex();
+    if (s_discover_lock == NULL) return ESP_ERR_NO_MEM;
 
     s_rx_buf = malloc(RX_BUF_BYTES);
     if (s_rx_buf == NULL) return ESP_ERR_NO_MEM;
@@ -294,4 +305,101 @@ esp_err_t pv_moonraker_clear_config(void)
     nvs_commit(h);
     nvs_close(h);
     return ESP_OK;
+}
+
+// ---------- mDNS discovery ----------
+
+#define DISCOVER_TIMEOUT_MS  2000
+
+static void discover_task(void *arg)
+{
+    (void)arg;
+    mdns_result_t *results = NULL;
+    esp_err_t err = mdns_query_ptr("_moonraker", "_tcp",
+                                   DISCOVER_TIMEOUT_MS,
+                                   PV_MOONRAKER_DISCOVER_MAX, &results);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mdns_query_ptr: %s", esp_err_to_name(err));
+    }
+
+    // Rebuild cache under the discovery lock so a reader never sees a
+    // half-populated entry.
+    xSemaphoreTake(s_discover_lock, portMAX_DELAY);
+    int n = 0;
+    for (mdns_result_t *r = results; r != NULL && n < PV_MOONRAKER_DISCOVER_MAX; r = r->next) {
+        pv_moonraker_service_t *out = &s_discover_cache[n];
+        memset(out, 0, sizeof(*out));
+
+        // hostname is optional in the record; instance_name is the friendly
+        // label. Prefer hostname because it's what mainsailos et al. publish.
+        const char *name = r->hostname ? r->hostname
+                          : (r->instance_name ? r->instance_name : "unknown");
+        // mDNS records may or may not include the .local suffix.
+        if (r->hostname && strstr(r->hostname, ".local") == NULL) {
+            snprintf(out->hostname, sizeof(out->hostname), "%s.local", name);
+        } else {
+            strncpy(out->hostname, name, sizeof(out->hostname) - 1);
+        }
+        out->port = r->port ? r->port : 7125;
+
+        // First IPv4 address wins — Moonraker only serves over IPv4 in stock.
+        for (mdns_ip_addr_t *a = r->addr; a != NULL; a = a->next) {
+            if (a->addr.type == ESP_IPADDR_TYPE_V4) {
+                snprintf(out->ip, sizeof(out->ip), IPSTR, IP2STR(&a->addr.u_addr.ip4));
+                break;
+            }
+        }
+        if (out->ip[0] == '\0') continue;   // skip records with no v4 addr
+        n++;
+    }
+    s_discover_count = n;
+    s_discovering    = false;
+    xSemaphoreGive(s_discover_lock);
+
+    if (results) mdns_query_results_free(results);
+    ESP_LOGI(TAG, "discover done: %d printer(s)", n);
+    vTaskDelete(NULL);
+}
+
+esp_err_t pv_moonraker_discover_start(void)
+{
+    if (s_discover_lock == NULL) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_discover_lock, portMAX_DELAY);
+    if (s_discovering) {
+        xSemaphoreGive(s_discover_lock);
+        return ESP_OK;   // coalesce
+    }
+    s_discovering = true;
+    xSemaphoreGive(s_discover_lock);
+
+    // One-shot task; self-deletes when done. Own its own stack because
+    // mdns_query_ptr blocks in the caller for up to DISCOVER_TIMEOUT_MS.
+    if (xTaskCreate(discover_task, "pv_mk_disc", 4096, NULL, 4, NULL) != pdPASS) {
+        xSemaphoreTake(s_discover_lock, portMAX_DELAY);
+        s_discovering = false;
+        xSemaphoreGive(s_discover_lock);
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+bool pv_moonraker_is_discovering(void)
+{
+    if (s_discover_lock == NULL) return false;
+    bool r;
+    xSemaphoreTake(s_discover_lock, portMAX_DELAY);
+    r = s_discovering;
+    xSemaphoreGive(s_discover_lock);
+    return r;
+}
+
+int pv_moonraker_get_discovered(pv_moonraker_service_t *out, int max)
+{
+    if (out == NULL || max <= 0 || s_discover_lock == NULL) return 0;
+    int n;
+    xSemaphoreTake(s_discover_lock, portMAX_DELAY);
+    n = s_discover_count < max ? s_discover_count : max;
+    memcpy(out, s_discover_cache, n * sizeof(pv_moonraker_service_t));
+    xSemaphoreGive(s_discover_lock);
+    return n;
 }
