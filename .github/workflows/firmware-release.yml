@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to create or update, for example v0.1.0"
+        description: "Release tag to create or update, for example v0.1.1"
         required: true
         type: string
 
@@ -30,88 +30,28 @@ jobs:
           target: esp32
           path: firmware
 
-      - name: Package release artifacts
+      - name: Merge into a single flashable image
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.1
+          target: esp32
+          path: firmware
+          command: >
+            python -m esptool --chip esp32 merge_bin -o pandavent-klipper.bin
+            --flash_mode dio --flash_size 4MB --flash_freq 40m
+            0x1000 build/bootloader/bootloader.bin
+            0x8000 build/partition_table/partition-table.bin
+            0xf000 build/ota_data_initial.bin
+            0x20000 build/pandavent_klipper.bin
+
+      - name: Stage release
         run: |
           set -euo pipefail
-
           mkdir -p dist
-          cp firmware/build/pandavent_klipper.bin dist/
-          cp firmware/build/pandavent_klipper.elf dist/
-          cp firmware/build/pandavent_klipper.map dist/
-          cp firmware/build/bootloader/bootloader.bin dist/
-          cp firmware/build/partition_table/partition-table.bin dist/
-          cp firmware/build/ota_data_initial.bin dist/
-
-          cat > dist/flash_args <<'EOF'
-          --flash_mode dio --flash_freq 40m --flash_size 4MB
-          0x1000 bootloader.bin
-          0x8000 partition-table.bin
-          0xf000 ota_data_initial.bin
-          0x20000 pandavent_klipper.bin
-          EOF
-
-          cat > dist/flasher_args.json <<'EOF'
-          {
-            "write_flash_args": ["--flash_mode", "dio", "--flash_size", "4MB", "--flash_freq", "40m"],
-            "flash_settings": {
-              "flash_mode": "dio",
-              "flash_size": "4MB",
-              "flash_freq": "40m"
-            },
-            "flash_files": {
-              "0x1000": "bootloader.bin",
-              "0x8000": "partition-table.bin",
-              "0xf000": "ota_data_initial.bin",
-              "0x20000": "pandavent_klipper.bin"
-            },
-            "bootloader": { "offset": "0x1000", "file": "bootloader.bin", "encrypted": "false" },
-            "partition-table": { "offset": "0x8000", "file": "partition-table.bin", "encrypted": "false" },
-            "otadata": { "offset": "0xf000", "file": "ota_data_initial.bin", "encrypted": "false" },
-            "app": { "offset": "0x20000", "file": "pandavent_klipper.bin", "encrypted": "false" },
-            "extra_esptool_args": {
-              "after": "hard_reset",
-              "before": "default_reset",
-              "stub": true,
-              "chip": "esp32"
-            }
-          }
-          EOF
-
-          cat > dist/FLASHING.txt <<'EOF'
-          If you downloaded a GitHub Actions artifact, unzip it first:
-
-            unzip pandavent-klipper-*.zip
-            cd pandavent-klipper-*
-
-          Install esptool if needed:
-
-            python -m pip install esptool
-
-          Put the ESP32 in bootloader mode, then flash with:
-
-            python -m esptool --chip esp32 -p PORT -b 460800 \
-              --before default_reset --after hard_reset write_flash @flash_args
-
-          Or run the equivalent explicit command:
-
-            python -m esptool --chip esp32 -p PORT -b 460800 --before default_reset --after hard_reset \
-              write_flash --flash_mode dio --flash_size 4MB --flash_freq 40m \
-              0x1000 bootloader.bin \
-              0x8000 partition-table.bin \
-              0xf000 ota_data_initial.bin \
-              0x20000 pandavent_klipper.bin
-          EOF
-
+          mv firmware/pandavent-klipper.bin dist/
           cd dist
-          sha256sum * > SHA256SUMS
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pandavent-klipper-release-${{ github.event.inputs.tag || github.ref_name }}
-          if-no-files-found: error
-          retention-days: 30
-          path: dist/*
+          sha256sum pandavent-klipper.bin > SHA256SUMS
+          ls -lh
 
       - name: Publish GitHub release
         env:
@@ -120,8 +60,41 @@ jobs:
         run: |
           set -euo pipefail
 
+          cat > release_notes.md <<'NOTES'
+          ## Flashing
+
+          Install esptool:
+
+          ```
+          python -m pip install esptool
+          ```
+
+          Put the ESP32 in download mode (most USB devkits do this automatically; on bare modules, hold **BOOT** while pulsing **EN/RST**). Then flash the whole thing in one shot:
+
+          ```
+          python -m esptool --chip esp32 -p PORT -b 460800 write_flash 0x0 pandavent-klipper.bin
+          ```
+
+          Replace `PORT` with your serial device (`/dev/tty.usbserial-0001` on macOS, `/dev/ttyUSB0` on Linux, `COM3` on Windows).
+
+          The image already includes the bootloader, partition table, OTA-data slot, and the app — nothing else to download.
+
+          ## First boot
+
+          The device comes up as **`Panda_Vent_XXXX`** (open WiFi hotspot, WPA2 password `987654321`, matching the stock firmware). Join it, the captive portal will pop, and you can enter your home WiFi + Moonraker printer from there. It also advertises on mDNS as **`PandaVent.local`** once it joins your LAN.
+
+          ## Verify download
+
+          ```
+          shasum -a 256 -c SHA256SUMS
+          ```
+          NOTES
+
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" dist/* --clobber
+            gh release edit "$RELEASE_TAG" --notes-file release_notes.md
           else
-            gh release create "$RELEASE_TAG" dist/* --title "$RELEASE_TAG" --generate-notes
+            gh release create "$RELEASE_TAG" dist/* \
+              --title "$RELEASE_TAG" \
+              --notes-file release_notes.md
           fi

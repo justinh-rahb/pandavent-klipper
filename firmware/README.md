@@ -37,21 +37,16 @@ is pushed, or by running the "Firmware Release" workflow manually with a tag.
 
 ### Flashing release artifacts
 
-GitHub downloads workflow artifacts as zip archives. Unzip the archive, put the
-ESP32 in bootloader mode, then flash the included binaries with `esptool`:
+Releases ship a single merged image (bootloader + partition table + OTA data +
+app, one file) so flashing is a one-liner:
 
 ```sh
-unzip pandavent-klipper-*.zip
-cd pandavent-klipper-*
-python -m pip install esptool   # if esptool is not already installed
+python -m pip install esptool   # if you don't already have it
 python -m esptool --chip esp32 -p /dev/tty.usbserial-* -b 460800 \
-  --before default_reset --after hard_reset write_flash @flash_args
+  write_flash 0x0 pandavent-klipper.bin
 ```
 
-The release package also includes `FLASHING.txt` and `SHA256SUMS`. The explicit
-offsets are `0x1000` for `bootloader.bin`, `0x8000` for `partition-table.bin`,
-`0xf000` for `ota_data_initial.bin`, and `0x20000` for
-`pandavent_klipper.bin`.
+`SHA256SUMS` next to it if you want to verify.
 
 ## Layout
 
