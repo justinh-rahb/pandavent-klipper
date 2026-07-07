@@ -1,10 +1,10 @@
-# PandaVent-Klipper
+# OpenVent
 
 Custom firmware for the [Bigtreetech Panda Vent](https://github.com/bigtreetech/Panda-Vent) that replaces the stock Bambu Lab integration with [Moonraker](https://github.com/Arksine/moonraker)/[Klipper](https://www.klipper3d.org/) support.
 
 ## What is this?
 
-The Panda Vent is a smart vent riser for enclosed 3D printers. The stock firmware only works with Bambu Lab printers via their proprietary MQTT protocol. This project replaces that firmware so the hardware works with any Klipper-based printer via Moonraker's API.
+The Panda Vent is a smart vent riser for enclosed 3D printers. The stock firmware only works with Bambu Lab printers via their proprietary MQTT protocol. OpenVent replaces that firmware so the hardware works with any Klipper-based printer via Moonraker's API.
 
 ## Features (Planned)
 
@@ -35,24 +35,31 @@ Full pin map + provenance: [docs/HARDWARE_ANALYSIS.md](docs/HARDWARE_ANALYSIS.md
 
 ## ⚠ Back up your stock firmware first
 
-Before flashing anything from this project, **dump the whole flash** so you have
-a way back. BTT doesn't publish source or release binaries for the Panda Vent,
-so if you lose the stock image there's no official way to recover it.
+Before flashing OpenVent, **dump the whole flash** so you have a way back —
+BTT doesn't publish source or release binaries for the Panda Vent, so if you
+lose the stock image there's no official way to recover it. The included
+[`scripts/openvent`](scripts/openvent) helper wraps this up:
 
 ```
-python -m pip install esptool
-python -m esptool --chip esp32 -p PORT -b 460800 read_flash 0x0 0x400000 stock-panda-vent-backup.bin
+scripts/openvent backup                 # → stock-panda-vent-backup.bin
+scripts/openvent install v0.2.0         # download + flash a release
+scripts/openvent restore stock-panda-vent-backup.bin   # roll back
 ```
 
-Keep that file somewhere safe. To go back to stock at any time:
-
-```
-python -m esptool --chip esp32 -p PORT -b 460800 write_flash 0x0 stock-panda-vent-backup.bin
-```
+(All three take an optional `-p /dev/tty.usbserial-XXXX` if the default
+autodetect doesn't find the right port.)
 
 ## Status
 
-🚧 **Phase 1 firmware complete, awaiting hardware bring-up.** Every component compiles against ESP-IDF v5.3+; on-device verification is the next milestone.
+**Working on a real ESP32 devkit, no vent module attached yet.**
+
+- ✅ Firmware compiles + boots against ESP-IDF v5.3+
+- ✅ WiFi station + AP fallback, mDNS `OpenVent.local`, captive portal
+- ✅ Portal: tabbed UI, live status, WiFi setup, Moonraker config, OTA upload, factory reset
+- ✅ Moonraker WebSocket client with `print_stats` + `heater_bed` subscriptions
+- ✅ Physical button and status LED wired to the mode state machine
+- ✅ Config-detect ADC returns 0 groups on a bare board — hot-plug ready
+- ⬜ Not yet verified: motors, hall sensors, WS2812 outputs (needs actual vent hardware)
 
 [![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/wildtang3nt)
 

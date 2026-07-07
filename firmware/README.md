@@ -1,4 +1,4 @@
-# PandaVent-Klipper Firmware
+# OpenVent Firmware
 
 ESP-IDF v5.3+ project targeting the classic ESP32 in the Bigtreetech Panda Vent.
 
@@ -39,17 +39,17 @@ is pushed, or by running the "Firmware Release" workflow manually with a tag.
 
 Each release ships two binaries:
 
-- **`pandavent-klipper-full.bin`** — bootloader + partition table + OTA data +
+- **`openvent-full.bin`** — bootloader + partition table + OTA data +
   app, one file. For first-time flashing over USB.
 
   ```sh
   python -m esptool --chip esp32 -p /dev/tty.usbserial-* -b 460800 \
-    write_flash 0x0 pandavent-klipper-full.bin
+    write_flash 0x0 openvent-full.bin
   ```
 
-- **`pandavent-klipper-ota.bin`** — app only. Upload via the portal's
+- **`openvent-ota.bin`** — app only. Upload via the portal's
   **OTA firmware update** form on a device that's already running
-  PandaVent-Klipper. No USB cable needed.
+  OpenVent. No USB cable needed.
 
 `SHA256SUMS` next to them if you want to verify.
 

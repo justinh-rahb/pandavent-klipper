@@ -62,7 +62,7 @@ static void on_button(pv_button_id_t id, pv_button_event_t ev)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "PandaVent-Klipper booting");
+    ESP_LOGI(TAG, "OpenVent booting");
 
     ESP_ERROR_CHECK(pv_motor_init());
     ESP_ERROR_CHECK(pv_wifi_start());

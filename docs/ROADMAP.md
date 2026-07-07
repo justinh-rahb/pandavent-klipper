@@ -1,4 +1,4 @@
-# PandaVent-Klipper Roadmap
+# OpenVent Roadmap
 
 Custom firmware for the Bigtreetech Panda Vent hardware that replaces the
 stock Bambu Lab MQTT integration with Moonraker/Klipper support.
@@ -27,7 +27,7 @@ stock Bambu Lab MQTT integration with Moonraker/Klipper support.
 - [x] Web page to enter SSID + password
 - [x] Store WiFi credentials in NVS (`app_nvs` namespace, stock-compatible)
 - [x] Auto-reconnect to saved WiFi on boot
-- [x] Advertise `PandaVent.local` over mDNS
+- [x] Advertise `OpenVent.local` over mDNS
 
 ### Moonraker Configuration
 - [x] Web page: enter Moonraker IP/hostname and port
@@ -50,7 +50,7 @@ Verified on a bare ESP32 devkit (no vent hardware attached):
 - [x] Portal reachable from a phone in both AP and STA modes
 - [x] Captive portal detection triggers on iOS / Android
 - [x] WiFi scan populates the SSID dropdown
-- [x] mDNS `PandaVent.local` resolves on the LAN
+- [x] mDNS `OpenVent.local` resolves on the LAN
 - [x] Config-detect ADC reports 0 groups on the bare board (unpopulated pin)
 
 Still needs actual Panda Vent hardware:
@@ -63,23 +63,29 @@ Still needs actual Panda Vent hardware:
 
 To match the stock BTT firmware capabilities, the following features must be implemented in the Web UI and backend:
 
+### Portal (Web UI)
+- [x] Tabbed layout — Home / WiFi / Printer / System (CSS-only, no JS)
+- [x] Persistent status card — firmware version, WiFi state + IP + RSSI, Moonraker state, printer state, bed temp, vent target, mode
+- [x] Quick-action Open / Close vent buttons on Home (same effect as short-press on the physical button)
+
 ### Wi-Fi Page Parity
-- [x] Network Scanner: Scan for visible Wi-Fi networks and display as a selectable list (`pv_wifi_scan_start` + portal `<select>` dropdown)
-- [ ] Connection Status: Display IP address and clear connection status/troubleshooting prompts
+- [x] Network scanner + selectable SSID dropdown (`pv_wifi_scan_start`)
+- [x] Manual SSID entry for hidden networks
+- [x] Connection status: IP + RSSI in the status card
 
 ### AP Page Parity
-- [x] Configurable AP Hotspot: Allow user to change AP SSID, Password, and IP subnet (`pv_wifi_ap_config_t` + portal `/ap_config`)
-- [ ] AP Toggle: Allow disabling the AP hotspot entirely to save resources
-- [x] Apply & Reboot: Require and handle device reboot to apply AP changes (`pv_wifi_set_ap_config_and_reboot`)
+- [x] Configurable AP hotspot — SSID / password / IP (`pv_wifi_ap_config_t`)
+- [x] AP toggle — checkbox to disable AP fallback entirely (with lockout warning)
+- [x] Apply & reboot on save (`pv_wifi_set_ap_config_and_reboot`)
 
 ### Printer (Moonraker) Page Parity
-- [ ] Printer Discovery: tried mDNS `_moonraker._tcp` (most Klipper installs don't advertise it) and then a subnet TCP-connect sweep (fired but never found anything on-hardware). Both removed for now — users configure host/port manually. Worth revisiting with better diagnostics on a live LAN.
+- [ ] Printer discovery: tried mDNS `_moonraker._tcp` (most Klipper installs don't advertise it) and then a subnet TCP-connect sweep (unreliable on real LANs). Both removed. Users configure host/port manually. Worth revisiting later with better probing.
 
-### Settings Page Parity
-- [ ] OTA Updates: Implement `.bin` upload via Web UI and OTA flashing process
-- [ ] Factory Reset: Add Web UI button for clearing NVS and rebooting (physical BOOT-button reset already implemented in `pv_button`)
-- [ ] Firmware Version: Display current version
-- [ ] Language Toggle: Support for English and Simplified Chinese (optional, but needed for 1:1 parity)
+### System Page Parity
+- [x] OTA updates: `.bin` upload via web UI, streams directly into the inactive OTA partition
+- [x] Factory reset: web UI button (in Danger Zone) — clears WiFi / Moonraker / policy NVS and reboots
+- [x] Firmware version: shown in status card (from `esp_app_get_description`)
+- [ ] Language toggle: English / Simplified Chinese (optional; not needed for functional parity)
 
 ### Vent Button Parity (Minor Adjustments)
 - [x] Single-click in AUTO immediately switches to MANUAL and reverses vent state (`app_main:on_button`)

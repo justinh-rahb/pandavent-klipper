@@ -21,7 +21,7 @@ typedef enum {
 // ip == 0 select the built-in defaults (MAC-derived SSID, "987654321",
 // 192.168.4.1). Stored in NVS under app_nvs.
 typedef struct {
-    char     ssid[33];      // "" → default Panda_Vent_XXXX
+    char     ssid[33];      // "" → default OpenVent_XXXX
     char     password[65];  // "" → default 987654321 (WPA2-PSK requires ≥ 8 chars)
     uint32_t ip;            // host byte order; 0 → default 192.168.4.1
     bool     enabled;       // false = don't fall back to AP if STA fails
@@ -62,5 +62,5 @@ esp_err_t pv_wifi_set_ap_config_and_reboot(const pv_wifi_ap_config_t *cfg);
 
 // AP details, useful for portal DNS/HTTP setup.
 #define PV_WIFI_AP_PASSWORD    "987654321"   // matches stock firmware
-#define PV_WIFI_AP_SSID_PREFIX "Panda_Vent_"
-#define PV_WIFI_HOSTNAME       "PandaVent"    // resolves as PandaVent.local via mDNS
+#define PV_WIFI_AP_SSID_PREFIX "OpenVent_"
+#define PV_WIFI_HOSTNAME       "OpenVent"    // resolves as OpenVent.local via mDNS

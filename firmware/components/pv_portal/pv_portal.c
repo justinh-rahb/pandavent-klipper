@@ -146,7 +146,7 @@ static esp_err_t send_head(httpd_req_t *req)
     static const char *HEAD =
 "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-"<title>PandaVent</title>"
+"<title>OpenVent</title>"
 "<style>"
 "body{font-family:sans-serif;max-width:520px;margin:1em auto;padding:0 1em;color:#222}"
 "h1{font-size:1.3em;margin-bottom:.2em}"
@@ -169,7 +169,7 @@ static esp_err_t send_head(httpd_req_t *req)
 ".tab{display:none}.tab:target{display:block}"
 "#home{display:block}.tab:target~#home{display:none}"
 "</style></head><body>"
-"<h1>PandaVent</h1>"
+"<h1>OpenVent</h1>"
 "<nav class=\"tabs\">"
   "<a href=\"#home\">Home</a>"
   "<a href=\"#wifi\">WiFi</a>"
@@ -398,7 +398,7 @@ static esp_err_t send_ota_section(httpd_req_t *req)
 {
     return SEND(req,
         "<h2>OTA firmware update</h2>"
-        "<div class=\"hint\">Upload a <code>pandavent-klipper-ota.bin</code> from the releases page. The full-flash image (<code>-full.bin</code>) is only for esptool — don't upload it here.</div>"
+        "<div class=\"hint\">Upload a <code>openvent-ota.bin</code> from the releases page. The full-flash image (<code>-full.bin</code>) is only for esptool — don't upload it here.</div>"
         "<form id=\"ota\" onsubmit=\"return uploadOta(event)\">"
           "<label>Firmware file</label>"
           "<input type=\"file\" id=\"otafile\" accept=\".bin\" required>"

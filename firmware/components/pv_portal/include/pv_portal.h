@@ -1,6 +1,6 @@
 #pragma once
 
-// PandaVent config web UI. Serves the same page in both AP and STA modes so
+// OpenVent config web UI. Serves the same page in both AP and STA modes so
 // initial setup and later reconfiguration use the same URL. In AP mode it
 // also runs a DNS redirector so mobile OSes pop the "Sign in to network"
 // prompt automatically.

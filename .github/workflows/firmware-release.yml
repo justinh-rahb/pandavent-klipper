@@ -37,12 +37,12 @@ jobs:
           target: esp32
           path: firmware
           command: >
-            python -m esptool --chip esp32 merge_bin -o pandavent-klipper-full.bin
+            python -m esptool --chip esp32 merge_bin -o openvent-full.bin
             --flash_mode dio --flash_size 4MB --flash_freq 40m
             0x1000 build/bootloader/bootloader.bin
             0x8000 build/partition_table/partition-table.bin
             0xf000 build/ota_data_initial.bin
-            0x20000 build/pandavent_klipper.bin
+            0x20000 build/openvent.bin
 
       - name: Stage release
         run: |
@@ -50,12 +50,12 @@ jobs:
           mkdir -p dist
           # Full image: bootloader + partitions + OTA data + app, one shot,
           # flashed with esptool at offset 0. This is the "first-time" image.
-          mv firmware/pandavent-klipper-full.bin dist/
+          mv firmware/openvent-full.bin dist/
           # OTA image: just the app. Upload via the portal's OTA form after
           # the device is already running an older version of this firmware.
-          cp firmware/build/pandavent_klipper.bin dist/pandavent-klipper-ota.bin
+          cp firmware/build/openvent.bin dist/openvent-ota.bin
           cd dist
-          sha256sum pandavent-klipper-full.bin pandavent-klipper-ota.bin > SHA256SUMS
+          sha256sum openvent-full.bin openvent-ota.bin > SHA256SUMS
           ls -lh
 
       - name: Publish GitHub release
@@ -68,8 +68,8 @@ jobs:
           cat > release_notes.md <<'NOTES'
           ## Which file do I need?
 
-          - **`pandavent-klipper-full.bin`** — first-time flash of a fresh module. Contains bootloader + partition table + OTA data + app, flashed with `esptool` over USB.
-          - **`pandavent-klipper-ota.bin`** — updating a device that's already running this firmware. Upload via the portal's **OTA firmware update** form.
+          - **`openvent-full.bin`** — first-time flash of a fresh module. Contains bootloader + partition table + OTA data + app, flashed with `esptool` over USB.
+          - **`openvent-ota.bin`** — updating a device that's already running this firmware. Upload via the portal's **OTA firmware update** form.
 
           ## ⚠ Back up your stock firmware first (only for first-time flashing)
 
@@ -92,23 +92,23 @@ jobs:
           Put the ESP32 in download mode (most USB devkits do this automatically; on bare modules, hold **BOOT** while pulsing **EN/RST**). Then:
 
           ```
-          python -m esptool --chip esp32 -p PORT -b 460800 write_flash 0x0 pandavent-klipper-full.bin
+          python -m esptool --chip esp32 -p PORT -b 460800 write_flash 0x0 openvent-full.bin
           ```
 
           Replace `PORT` with your serial device (`/dev/tty.usbserial-0001` on macOS, `/dev/ttyUSB0` on Linux, `COM3` on Windows).
 
           ## OTA update (from the portal)
 
-          If your device is already running PandaVent-Klipper, you can update from a browser without touching USB:
+          If your device is already running OpenVent, you can update from a browser without touching USB:
 
-          1. Load the portal (`http://PandaVent.local/` or the AP IP).
+          1. Load the portal (`http://OpenVent.local/` or the AP IP).
           2. Scroll to **OTA firmware update**.
-          3. Choose `pandavent-klipper-ota.bin` and hit **Upload & flash**.
+          3. Choose `openvent-ota.bin` and hit **Upload & flash**.
           4. The device writes to the inactive OTA slot, swaps the boot pointer, and reboots into the new version.
 
           ## First boot after full-flash
 
-          The device comes up as **`Panda_Vent_XXXX`** (WPA2 hotspot, password `987654321`). Join it, the captive portal will pop, and you can enter your home WiFi + Moonraker printer from there. It also advertises on mDNS as **`PandaVent.local`** once it joins your LAN.
+          The device comes up as **`OpenVent_XXXX`** (WPA2 hotspot, password `987654321`). Join it, the captive portal will pop, and you can enter your home WiFi + Moonraker printer from there. It also advertises on mDNS as **`OpenVent.local`** once it joins your LAN.
 
           ## Verify download
 
