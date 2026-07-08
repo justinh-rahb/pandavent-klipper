@@ -80,20 +80,19 @@ def main():
     # Regexes for the interesting lines from pv_motor.
     RE_DRIVING = re.compile(
         r"pv_motor:\s+grp=(\d+)\s+driving\s+\(want=(\w+)\)\s+"
-        r"hall_raw=(-?\d+)\s+hall_state=(\d+)"
+        r"hall_raw=(-?\d+)\s+hall_mv=(-?\d+)\s+hall_state=(\d+)"
     )
     RE_STALLED = re.compile(
         r"pv_motor:\s+grp=(\d+)\s+stalled;\s+retry\s+(\d+)/(\d+)\s+"
-        r"\(hall_raw=(-?\d+)\s+hall_state=(\d+)\)"
+        r"\(hall_raw=(-?\d+)\s+hall_mv=(-?\d+)\s+hall_state=(\d+)\)"
     )
     RE_GAVEUP = re.compile(
         r"pv_motor:\s+grp=(\d+)\s+gave up.*want=(\w+)\s+hall_raw=(-?\d+)\s+"
-        r"hall_state=(\d+)"
+        r"hall_mv=(-?\d+)\s+hall_state=(\d+)"
     )
     RE_MOTOR_ANY = re.compile(r"pv_motor:")
 
-    # Per-group + per-target aggregates of raw ADC values seen while driving.
-    # samples[(group, want)] = list of raw ints
+    # Per-group + per-target aggregates of (raw, mv) tuples seen while driving.
     samples = defaultdict(list)
     give_ups = []
 
@@ -119,22 +118,25 @@ def main():
 
             m = RE_DRIVING.search(line)
             if m:
-                g, want, raw_v, state = m.group(1), m.group(2), int(m.group(3)), int(m.group(4))
-                samples[(g, want)].append(raw_v)
-                print(f"  driving  grp={g} want={want:<6}  hall_raw={raw_v:>4}  state={state}")
+                g, want = m.group(1), m.group(2)
+                raw_v, mv, state = int(m.group(3)), int(m.group(4)), int(m.group(5))
+                samples[(g, want)].append((raw_v, mv))
+                print(f"  driving  grp={g} want={want:<6}  raw={raw_v:>4}  mV={mv:>4}  state={state}")
                 continue
 
             m = RE_STALLED.search(line)
             if m:
-                g, retry, mx, raw_v, state = m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
-                print(f"  stalled  grp={g} retry={retry}/{mx}                hall_raw={raw_v:>4}  state={state}")
+                g, retry, mx = m.group(1), int(m.group(2)), int(m.group(3))
+                raw_v, mv, state = int(m.group(4)), int(m.group(5)), int(m.group(6))
+                print(f"  stalled  grp={g} retry={retry}/{mx}                raw={raw_v:>4}  mV={mv:>4}  state={state}")
                 continue
 
             m = RE_GAVEUP.search(line)
             if m:
-                g, want, raw_v, state = m.group(1), m.group(2), int(m.group(3)), int(m.group(4))
-                give_ups.append((g, want, raw_v, state))
-                print(f"  GAVE UP  grp={g} want={want:<6}  hall_raw={raw_v:>4}  state={state}")
+                g, want = m.group(1), m.group(2)
+                raw_v, mv, state = int(m.group(3)), int(m.group(4)), int(m.group(5))
+                give_ups.append((g, want, raw_v, mv, state))
+                print(f"  GAVE UP  grp={g} want={want:<6}  raw={raw_v:>4}  mV={mv:>4}  state={state}")
                 continue
 
             if RE_MOTOR_ANY.search(line):
@@ -157,15 +159,17 @@ def main():
         print("Close in Manual mode while the script was running.")
     else:
         for (g, want), vals in sorted(samples.items()):
-            v_min, v_max = min(vals), max(vals)
-            v_last = vals[-1]
-            print(f"  grp={g} want={want:<6}  raw range seen: {v_min}..{v_max}   "
-                  f"(last sample: {v_last}, {len(vals)} samples)")
+            raws = [v[0] for v in vals]
+            mvs  = [v[1] for v in vals]
+            r_min, r_max, r_last = min(raws), max(raws), raws[-1]
+            m_min, m_max, m_last = min(mvs),  max(mvs),  mvs[-1]
+            print(f"  grp={g} want={want:<6}  raw {r_min}..{r_max} (last {r_last})   "
+                  f"mV {m_min}..{m_max} (last {m_last})   [{len(vals)} samples]")
     if give_ups:
         print()
         print("Gave-up events:")
-        for g, want, raw_v, state in give_ups:
-            print(f"  grp={g} want={want:<6}  final hall_raw={raw_v} state={state}")
+        for g, want, raw_v, mv, state in give_ups:
+            print(f"  grp={g} want={want:<6}  final raw={raw_v} mV={mv} state={state}")
     print()
     print(f"Full log written to: {os.path.abspath(output)}")
     print("Share that file (or paste the summary above) so we can pick new")

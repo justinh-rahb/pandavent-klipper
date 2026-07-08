@@ -129,15 +129,19 @@ Per motor (from `motor.c` decompilation):
 - Stop: fade active channel duty to 0 over 10 ms, then hard-off both
 - Up to 4 retries if hall doesn't confirm the target position
 
-Hall reading (from `motor_adc.c`) buckets the raw ADC into discrete states:
+Hall reading (from `motor_adc.c`) applies **factory line-fitting calibration**
+via `adc_cali_raw_to_voltage` before classifying — the numeric thresholds are
+millivolts, not raw ADC counts (confirmed by the `adc_cali_raw_to_voltage` and
+`adc_cali_create_scheme_line_fitting` symbol references in stock's binary at
+`3f42a91c` / `3f42a934`).
 
-| Return | Meaning                        | Raw ADC range           |
+| Return | Meaning                        | Calibrated mV range     |
 |--------|--------------------------------|-------------------------|
 | 0      | invalid / disconnected         | 0                       |
-| 1      | **OPEN endpoint** (fan-on)     | ~640–961 (0x280–0x3c0)  |
-| 2      | **CLOSED endpoint** (fan-off)  | ~1360–1680 (0x550–0x690)|
-| 3      | past-closed / over-travel      | raw + (-2080) < 0x173 (~2080–2450) |
-| 4      | in transit (catch-all)         | anything else non-zero  |
+| 1      | **OPEN endpoint** (fan-on)     | 640–960 mV  (0x280–0x3c0) |
+| 2      | **CLOSED endpoint** (fan-off)  | 1360–1680 mV (0x550–0x690) |
+| 3      | past-closed / over-travel      | mv + (-2080) < 0x173 (~2080–2450 mV) |
+| 4      | in transit (catch-all)         | anything else            |
 
 Direction of "OPEN" vs "CLOSED" was derived from the main state machine
 (`FUN_400de55c`, lines 36–43): stock reads the user's fan-on/off intent
