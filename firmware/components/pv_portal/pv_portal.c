@@ -1,5 +1,6 @@
 #include "pv_portal.h"
 #include "pv_dns.h"
+#include "pv_evlog.h"
 #include "pv_moonraker.h"
 #include "pv_policy.h"
 #include "pv_wifi.h"
@@ -193,6 +194,7 @@ static esp_err_t send_head(httpd_req_t *req)
   "<a href=\"#home\">Home</a>"
   "<a href=\"#wifi\">WiFi</a>"
   "<a href=\"#printer\">Printer</a>"
+  "<a href=\"#log\">Log</a>"
   "<a href=\"#system\">System</a>"
 "</nav>";
     return SEND(req, HEAD);
@@ -338,6 +340,63 @@ static esp_err_t send_moonraker_section(httpd_req_t *req)
     return SEND(req, buf);
 }
 
+static esp_err_t send_policy_section(httpd_req_t *req)
+{
+    float open_c = 45.0f, close_c = 35.0f;
+    pv_policy_get_thresholds(&open_c, &close_c);
+
+    char buf[900];
+    snprintf(buf, sizeof(buf),
+        "<h2>Auto-mode thresholds</h2>"
+        "<form method=\"POST\" action=\"/policy\">"
+        "<div class=\"hint\">"
+          "When the printer is idle or a print has completed, the vent opens once the bed climbs above the OPEN threshold and closes once it drops below the CLOSE threshold. During a print, the material rule (PLA opens / ABS seals) takes over."
+        "</div>"
+        "<div class=\"row\">"
+          "<div><label>Bed OPEN above (\xC2\xB0""C)</label>"
+            "<input name=\"bed_open\"  type=\"number\" step=\"0.5\" min=\"20\" max=\"120\" value=\"%.1f\" required></div>"
+          "<div><label>Bed CLOSE below (\xC2\xB0""C)</label>"
+            "<input name=\"bed_close\" type=\"number\" step=\"0.5\" min=\"10\" max=\"120\" value=\"%.1f\" required></div>"
+        "</div>"
+        "<div class=\"hint\">OPEN must be strictly greater than CLOSE — the gap is the hysteresis band.</div>"
+        "<button>Save thresholds</button>"
+        "</form>",
+        open_c, close_c);
+    esp_err_t r = SEND(req, buf);
+    if (r != ESP_OK) return r;
+
+    // Material rules — informational for 0.3.0. Editable overrides land later.
+    return SEND(req,
+        "<h2>Material rules</h2>"
+        "<div class=\"hint\">"
+          "When your printer reports a material, the vent decides based on the family. "
+          "Otherwise it falls back to the bed-temperature rules above."
+        "</div>"
+        "<table style=\"width:100%;border-collapse:collapse;margin-top:.5em\">"
+        "<tr><th style=\"text-align:left;padding:.3em .5em\">Material</th>"
+            "<th style=\"text-align:left;padding:.3em .5em\">Behavior during print</th></tr>"
+        "<tr><td style=\"padding:.3em .5em\">PLA, PETG, PET, TPU</td>"
+            "<td style=\"padding:.3em .5em\">Open — vent for cooling</td></tr>"
+        "<tr><td style=\"padding:.3em .5em\">ABS, ASA, PC, PA (nylon), HIPS</td>"
+            "<td style=\"padding:.3em .5em\">Sealed — retain heat</td></tr>"
+        "<tr><td style=\"padding:.3em .5em\">Unknown / not reported</td>"
+            "<td style=\"padding:.3em .5em\">Open (safe default for hobby prints)</td></tr>"
+        "</table>"
+        "<div class=\"hint\" style=\"margin-top:.75em\">"
+          "<b>To report material to OpenVent</b>, add this to your Klipper "
+          "<code>PRINT_START</code> macro so it fires at the start of every print:"
+        "</div>"
+        "<pre style=\"background:var(--code-bg,#f4f4f4);padding:.6em;border-radius:.3em;"
+          "overflow-x:auto;font-size:.9em\">"
+          "SAVE_VARIABLE VARIABLE=material VALUE='\"{material}\"'"
+        "</pre>"
+        "<div class=\"hint\">"
+          "Most slicers (SuperSlicer, PrusaSlicer, OrcaSlicer) expose "
+          "<code>{material}</code> or <code>{filament_type[0]}</code> in the start-gcode "
+          "template. Custom per-material overrides are on the roadmap."
+        "</div>");
+}
+
 static esp_err_t send_mode_section(httpd_req_t *req)
 {
     bool manual = pv_policy_get_mode() == PV_POLICY_MODE_MANUAL;
@@ -413,6 +472,51 @@ static esp_err_t send_ap_section(httpd_req_t *req)
     return SEND(req, buf);
 }
 
+static esp_err_t send_log_section(httpd_req_t *req)
+{
+    esp_err_t r = SEND(req,
+        "<h2>Event log</h2>"
+        "<div class=\"hint\">"
+          "Newest events first. Ring buffer resets on reboot. Timestamp is "
+          "seconds since boot."
+        "</div>"
+        "<table style=\"width:100%;border-collapse:collapse;font-size:.9em;font-family:monospace\">"
+        "<tr><th style=\"text-align:right;padding:.2em .5em;width:6em\">t (s)</th>"
+            "<th style=\"text-align:left;padding:.2em .5em\">event</th></tr>");
+    if (r != ESP_OK) return r;
+
+    // Static so we don't put ~6 KB on the httpd task stack. httpd is
+    // single-threaded so no lock is needed here.
+    static pv_evlog_entry_t entries[PV_EVLOG_MAX_ENTRIES];
+    size_t n = pv_evlog_snapshot(entries, PV_EVLOG_MAX_ENTRIES);
+    if (n == 0) {
+        r = SEND(req, "<tr><td colspan=\"2\" style=\"padding:.4em .5em;color:#888\">"
+                      "No events yet.</td></tr>");
+        if (r != ESP_OK) return r;
+    } else {
+        for (size_t i = 0; i < n; ++i) {
+            char text_esc[PV_EVLOG_TEXT_BYTES * 6];
+            html_escape(entries[i].text, text_esc, sizeof(text_esc));
+
+            char row_open[160];
+            snprintf(row_open, sizeof(row_open),
+                "<tr><td style=\"text-align:right;padding:.2em .5em;color:#666\">%lu.%03lu</td>"
+                "<td style=\"padding:.2em .5em\">",
+                (unsigned long)(entries[i].ms / 1000),
+                (unsigned long)(entries[i].ms % 1000));
+            r = SEND(req, row_open);
+            if (r != ESP_OK) return r;
+
+            r = SEND(req, text_esc);
+            if (r != ESP_OK) return r;
+
+            r = SEND(req, "</td></tr>");
+            if (r != ESP_OK) return r;
+        }
+    }
+    return SEND(req, "</table>");
+}
+
 static esp_err_t send_danger_section(httpd_req_t *req)
 {
     return SEND(req,
@@ -472,6 +576,11 @@ static esp_err_t handle_root(httpd_req_t *req)
 
     SEND(req, "<section id=\"printer\" class=\"tab\">");
     send_moonraker_section(req);
+    send_policy_section(req);
+    SEND(req, "</section>");
+
+    SEND(req, "<section id=\"log\" class=\"tab\">");
+    send_log_section(req);
     SEND(req, "</section>");
 
     SEND(req, "<section id=\"system\" class=\"tab\">");
@@ -559,6 +668,35 @@ static esp_err_t handle_moonraker_post(httpd_req_t *req)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "moonraker_set_config: %s", esp_err_to_name(err));
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed");
+        return ESP_OK;
+    }
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/#printer");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t handle_policy_post(httpd_req_t *req)
+{
+    char body[128];
+    if (recv_body(req, body, sizeof(body)) < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+        return ESP_OK;
+    }
+    char open_s[16] = {0}, close_s[16] = {0};
+    form_get(body, "bed_open",  open_s,  sizeof(open_s));
+    form_get(body, "bed_close", close_s, sizeof(close_s));
+    if (open_s[0] == '\0' || close_s[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing thresholds");
+        return ESP_OK;
+    }
+    float open_c  = strtof(open_s,  NULL);
+    float close_c = strtof(close_s, NULL);
+    esp_err_t err = pv_policy_set_thresholds(open_c, close_c);
+    if (err != ESP_OK) {
+        // Almost certainly the OPEN <= CLOSE guard tripped.
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "OPEN must be strictly greater than CLOSE");
         return ESP_OK;
     }
     httpd_resp_set_status(req, "303 See Other");
@@ -770,6 +908,7 @@ esp_err_t pv_portal_start(void)
     httpd_uri_t scan  = { .uri = "/scan",       .method = HTTP_POST, .handler = handle_scan_post };
     httpd_uri_t mk    = { .uri = "/moonraker",  .method = HTTP_POST, .handler = handle_moonraker_post };
     httpd_uri_t mode  = { .uri = "/mode",       .method = HTTP_POST, .handler = handle_mode_post };
+    httpd_uri_t poly  = { .uri = "/policy",     .method = HTTP_POST, .handler = handle_policy_post };
     httpd_uri_t apcfg = { .uri = "/ap_config",  .method = HTTP_POST, .handler = handle_ap_post };
     httpd_uri_t vent  = { .uri = "/vent",       .method = HTTP_POST, .handler = handle_vent_post };
     httpd_uri_t ota   = { .uri = "/ota",        .method = HTTP_POST, .handler = handle_ota_post };
@@ -779,6 +918,7 @@ esp_err_t pv_portal_start(void)
     httpd_register_uri_handler(s_httpd, &scan);
     httpd_register_uri_handler(s_httpd, &mk);
     httpd_register_uri_handler(s_httpd, &mode);
+    httpd_register_uri_handler(s_httpd, &poly);
     httpd_register_uri_handler(s_httpd, &apcfg);
     httpd_register_uri_handler(s_httpd, &vent);
     httpd_register_uri_handler(s_httpd, &ota);

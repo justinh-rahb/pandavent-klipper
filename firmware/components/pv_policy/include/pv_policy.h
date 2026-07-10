@@ -25,7 +25,13 @@ esp_err_t pv_policy_start(void);
 esp_err_t pv_policy_set_mode(pv_policy_mode_t mode);   // persisted to NVS
 pv_policy_mode_t pv_policy_get_mode(void);
 
-esp_err_t pv_policy_set_manual_target(pv_motor_target_t t);
+esp_err_t pv_policy_set_manual_target(pv_motor_target_t t);   // persisted
 pv_motor_target_t pv_policy_get_target(void);          // whatever we're commanding
 
-esp_err_t pv_policy_clear(void);   // wipe persisted mode
+// Bed-temperature hysteresis for AUTO mode (idle/complete only — during a
+// print the material rule wins). Default 45 / 35 °C. OPEN must be strictly
+// greater than CLOSE.
+esp_err_t pv_policy_get_thresholds(float *bed_open_c, float *bed_close_c);
+esp_err_t pv_policy_set_thresholds(float bed_open_c, float bed_close_c);
+
+esp_err_t pv_policy_clear(void);   // wipe all persisted policy state

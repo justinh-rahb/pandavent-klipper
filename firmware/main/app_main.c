@@ -1,5 +1,6 @@
 #include "pv_board.h"
 #include "pv_button.h"
+#include "pv_evlog.h"
 #include "pv_moonraker.h"
 #include "pv_motor.h"
 #include "pv_policy.h"
@@ -63,6 +64,9 @@ static void on_button(pv_button_id_t id, pv_button_event_t ev)
 void app_main(void)
 {
     ESP_LOGI(TAG, "OpenVent booting");
+
+    pv_evlog_init();
+    pv_evlog_add("boot");
 
     ESP_ERROR_CHECK(pv_motor_init());
     ESP_ERROR_CHECK(pv_wifi_start());

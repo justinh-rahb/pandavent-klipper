@@ -1,4 +1,5 @@
 #include "pv_moonraker.h"
+#include "pv_evlog.h"
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -136,6 +137,9 @@ static void recompute_printer_state(void)
         ESP_LOGI(TAG, "printer state: %s -> %s",
                  pv_printer_state_str(s_status.printer),
                  pv_printer_state_str(st));
+        pv_evlog_add("printer: %s -> %s",
+                     pv_printer_state_str(s_status.printer),
+                     pv_printer_state_str(st));
         s_status.printer = st;
     }
     s_status.printing = (st == PV_PRINTER_PRINTING);
@@ -334,6 +338,7 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     switch ((esp_websocket_event_id_t)id) {
     case WEBSOCKET_EVENT_CONNECTED:
         ESP_LOGI(TAG, "connected");
+        pv_evlog_add("moonraker connected");
         xSemaphoreTake(s_lock, portMAX_DELAY);
         s_status.state = PV_MK_CONNECTED;
         xSemaphoreGive(s_lock);
@@ -345,6 +350,11 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     case WEBSOCKET_EVENT_DISCONNECTED:
     case WEBSOCKET_EVENT_ERROR:
         xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (s_status.state != PV_MK_DISCONNECTED) {
+            // Avoid a log-flood: only note the first transition to
+            // disconnected. Repeat reconnect attempts stay quiet.
+            pv_evlog_add("moonraker disconnected");
+        }
         s_status.state = PV_MK_DISCONNECTED;
         // A dropped websocket says nothing about the printer itself, but we
         // also can't trust our cached state to still be current. Fall back
