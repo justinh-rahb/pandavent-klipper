@@ -2,6 +2,8 @@
 #include "pv_board.h"
 
 #include "driver/ledc.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -29,37 +31,23 @@ static const char *TAG = "pv_motor";
 #define MAX_RETRIES         4
 #define TICK_MS             10                  // task loop period
 
-// Hall thresholds — raw ADC counts. The 2026-07-10 diag capture showed that on
-// this board the hall response *is not monotonic* across the flap's travel:
-//   OPEN endpoint    → raw ~613
-//   mid-travel       → raw peaks ~2100+ (what stock labelled "state 3")
-//   CLOSED endpoint  → raw ~1374
-// So the raw value rises through the CLOSED band, keeps going up to a bump,
-// then falls back down as the flap reaches its physical closed stop. Our
-// original narrow CLOSED band [0x550..0x690) was missing both the "on the way
-// past" sample and the settled sample.
-//
-// Two-band split with an arrival debounce (see ARRIVED_DEBOUNCE_TICKS): anything
-// clearly below the crossover point is OPEN, anything above is CLOSED. Requiring
-// N consecutive samples in the target band before declaring arrival keeps a
-// single mid-travel spike from stopping the motor early.
-#define HALL_OPEN_LO        0x040      // ~15 mV headroom below reported OPEN
-#define HALL_OPEN_HI        0x500      // 1280 — clearly below any CLOSED reading
-#define HALL_CLOSED_LO      0x540      // 1344 — includes the settled CLOSED
-#define HALL_CLOSED_HI      0xa00      // 2560 — includes the mid-travel bump so
-                                       //         we don't miss the moment the
-                                       //         flap crosses the endpoint
+// Stock hall thresholds. These are calibrated millivolts, not ADC counts.
+// The unsigned width tests preserve stock's inclusive upper bounds.
+#define HALL_OPEN_LO_MV        0x280   // 640 mV
+#define HALL_OPEN_WIDTH_MV     0x141   // through 960 mV inclusive
+#define HALL_CLOSED_LO_MV      0x550   // 1360 mV
+#define HALL_CLOSED_WIDTH_MV   0x141   // through 1680 mV inclusive
+#define HALL_PAST_CLOSED_LO_MV 2080
+#define HALL_PAST_CLOSED_WIDTH 0x173   // through 2450 mV inclusive
 #define ARRIVED_DEBOUNCE_TICKS 3       // 30 ms of continuous in-band samples
-#define HALL_MID_LOW_TEST   0x173
-#define HALL_MID_OFFSET     (-2080)    // kept for parity with stock's state 3 test
 
-// Config-detect thresholds — from stock's FUN_400deb88. Three bands with
-// deliberate gaps: readings in the gaps mean "keep current config".
-#define DETECT_TWO_LO       0x76c   // ADC ∈ [0x76c, 0x960] → 4 motors, 2 strips
-#define DETECT_TWO_HI       (0x76c + 0x1f5)
-#define DETECT_ONE_LO       0x44c   // ADC ∈ [0x44c, 0x6a4] → 2 motors, 1 strip
-#define DETECT_ONE_HI       (0x44c + 0x259)
-#define DETECT_NONE_HI      0xc9    // ADC <  0xc9        → nothing connected
+// Stock config-detect thresholds, also calibrated millivolts. Readings in the
+// deliberate gaps mean "keep current config".
+#define DETECT_TWO_LO_MV    0x76c   // 1900 mV
+#define DETECT_TWO_WIDTH_MV 0x1f5   // through 2400 mV inclusive
+#define DETECT_ONE_LO_MV    0x44c   // 1100 mV
+#define DETECT_ONE_WIDTH_MV 0x259   // through 1700 mV inclusive
+#define DETECT_NONE_HI_MV   0xc9    // 0-200 mV inclusive
 
 // Config detect cadence: sample every 100 ticks (~1 s) and require the band
 // to hold for DEBOUNCE_CYCLES consecutive samples before we act on it.
@@ -86,6 +74,7 @@ typedef struct {
 
 static int              s_active_groups = 0;
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
+static adc_cali_handle_t          s_adc_cali   = NULL;
 static group_state_t    s_groups[PV_MOTOR_GROUP_COUNT];
 static SemaphoreHandle_t s_lock = NULL;
 static TaskHandle_t     s_task = NULL;
@@ -117,30 +106,44 @@ static inline pv_motor_hall_t hall_for_target(pv_motor_target_t t)
     return PV_HALL_INVALID;
 }
 
-static pv_motor_hall_t classify_hall(int raw)
+static pv_motor_hall_t classify_hall_mv(int mv)
 {
-    if (raw == 0) return PV_HALL_INVALID;
-    // Check CLOSED first (matches stock's ordering — state 2 before state 1).
-    if (raw >= HALL_CLOSED_LO && raw < HALL_CLOSED_HI) return PV_HALL_CLOSED;
-    if (raw >= HALL_OPEN_LO   && raw < HALL_OPEN_HI)   return PV_HALL_OPEN;
-    if ((uint32_t)(raw + HALL_MID_OFFSET) < HALL_MID_LOW_TEST) return PV_HALL_MID_LOW;
+    if (mv == 0) return PV_HALL_INVALID;
+    if ((uint32_t)(mv - HALL_CLOSED_LO_MV) < HALL_CLOSED_WIDTH_MV) {
+        return PV_HALL_CLOSED;
+    }
+    if ((uint32_t)(mv - HALL_OPEN_LO_MV) < HALL_OPEN_WIDTH_MV) {
+        return PV_HALL_OPEN;
+    }
+    if ((uint32_t)(mv - HALL_PAST_CLOSED_LO_MV) < HALL_PAST_CLOSED_WIDTH) {
+        return PV_HALL_MID_LOW;
+    }
     return PV_HALL_MID_HIGH;
 }
 
-// Cache of the last raw ADC per group so diagnostic log paths can print it
-// without plumbing the value through every return.
+// Caches for diagnostic logging without plumbing values through every caller.
 static int s_hall_raw_last[PV_MOTOR_GROUP_COUNT];
+static int s_hall_mv_last[PV_MOTOR_GROUP_COUNT];
+
+static esp_err_t read_adc_mv(adc_channel_t channel, int *raw, int *mv)
+{
+    esp_err_t err = adc_oneshot_read(s_adc_handle, channel, raw);
+    if (err != ESP_OK) return err;
+    return adc_cali_raw_to_voltage(s_adc_cali, *raw, mv);
+}
 
 static pv_motor_hall_t read_hall(int g)
 {
     int raw = 0;
-    esp_err_t err = adc_oneshot_read(s_adc_handle, PV_MOTOR_GROUPS[g].hall_adc_ch, &raw);
+    int mv = 0;
+    esp_err_t err = read_adc_mv(PV_MOTOR_GROUPS[g].hall_adc_ch, &raw, &mv);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "hall read grp=%d failed: %s", g, esp_err_to_name(err));
+        ESP_LOGW(TAG, "hall read/convert grp=%d failed: %s", g, esp_err_to_name(err));
         return PV_HALL_INVALID;
     }
     s_hall_raw_last[g] = raw;
-    return classify_hall(raw);
+    s_hall_mv_last[g] = mv;
+    return classify_hall_mv(mv);
 }
 
 // Read the config-detect ADC and classify to an active-group count. Returns
@@ -149,12 +152,13 @@ static pv_motor_hall_t read_hall(int g)
 static int classify_hwconfig(void)
 {
     int raw = 0;
-    if (adc_oneshot_read(s_adc_handle, PV_ADC_CONFIG_DETECT_CH, &raw) != ESP_OK) {
+    int mv = 0;
+    if (read_adc_mv(PV_ADC_CONFIG_DETECT_CH, &raw, &mv) != ESP_OK) {
         return -1;
     }
-    if (raw >= DETECT_TWO_LO && raw < DETECT_TWO_HI) return 4;
-    if (raw >= DETECT_ONE_LO && raw < DETECT_ONE_HI) return 2;
-    if (raw <  DETECT_NONE_HI)                       return 0;
+    if ((uint32_t)(mv - DETECT_TWO_LO_MV) < DETECT_TWO_WIDTH_MV) return 4;
+    if ((uint32_t)(mv - DETECT_ONE_LO_MV) < DETECT_ONE_WIDTH_MV) return 2;
+    if (mv < DETECT_NONE_HI_MV) return 0;
     return -1;
 }
 
@@ -225,8 +229,8 @@ static void begin_drive_toward(int g, pv_motor_target_t target)
 
 // ---------- hot-plug reconfiguration ----------
 
-// Configure LEDC channels + hall ADC channel for one motor group. Idempotent —
-// safe to re-run for a group that's already configured.
+// Configure LEDC channels for one motor group. All ADC channels are configured
+// earlier, before LEDC is touched, to preserve stock's boot ordering.
 static esp_err_t hw_init_group(int g)
 {
     const pv_motor_group_t *m = &PV_MOTOR_GROUPS[g];
@@ -245,13 +249,6 @@ static esp_err_t hw_init_group(int g)
     ESP_RETURN_ON_ERROR(ledc_channel_config(&fwd), TAG, "ledc fwd grp=%d", g);
     ESP_RETURN_ON_ERROR(ledc_channel_config(&rev), TAG, "ledc rev grp=%d", g);
 
-    adc_oneshot_chan_cfg_t chan = {
-        .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten    = ADC_ATTEN_DB_12,
-    };
-    ESP_RETURN_ON_ERROR(
-        adc_oneshot_config_channel(s_adc_handle, m->hall_adc_ch, &chan),
-        TAG, "adc hall grp=%d", g);
     return ESP_OK;
 }
 
@@ -322,11 +319,11 @@ static void tick_group(int g)
     // can see the whole trajectory (the 2026-07-10 diag caught a non-monotonic
     // hall response that a 1 Hz log would have missed).
     if (st->running) {
-        ESP_LOGI(TAG, "grp=%d driving (want=%s) hall_raw=%d hall_state=%d",
+        ESP_LOGI(TAG, "grp=%d driving (want=%s) hall_raw=%d hall_mv=%d hall_state=%d",
                  g,
                  want == PV_MOTOR_TARGET_OPEN   ? "OPEN"
                : want == PV_MOTOR_TARGET_CLOSED ? "CLOSED" : "STOP",
-                 s_hall_raw_last[g], (int)hall);
+                 s_hall_raw_last[g], s_hall_mv_last[g], (int)hall);
     }
 
     // Stop requested.
@@ -354,10 +351,10 @@ static void tick_group(int g)
         st->arrived_consec++;
         if (st->arrived_consec >= ARRIVED_DEBOUNCE_TICKS) {
             if (st->running) {
-                ESP_LOGI(TAG, "grp=%d arrived (want=%s hall_raw=%d hall_state=%d)",
+                ESP_LOGI(TAG, "grp=%d arrived (want=%s hall_raw=%d hall_mv=%d hall_state=%d)",
                          g,
                          want == PV_MOTOR_TARGET_OPEN ? "OPEN" : "CLOSED",
-                         s_hall_raw_last[g], (int)hall);
+                         s_hall_raw_last[g], s_hall_mv_last[g], (int)hall);
                 stop_drive(g);
             }
             st->retries = 0;
@@ -386,17 +383,18 @@ static void tick_group(int g)
     // Timed out without hitting the endpoint — retry or give up.
     if (st->retries < MAX_RETRIES) {
         st->retries++;
-        ESP_LOGW(TAG, "grp=%d stalled; retry %d/%d (hall_raw=%d hall_state=%d)",
-                 g, st->retries, MAX_RETRIES, s_hall_raw_last[g], (int)hall);
+        ESP_LOGW(TAG, "grp=%d stalled; retry %d/%d (hall_raw=%d hall_mv=%d hall_state=%d)",
+                 g, st->retries, MAX_RETRIES,
+                 s_hall_raw_last[g], s_hall_mv_last[g], (int)hall);
         stop_drive(g);
         vTaskDelay(pdMS_TO_TICKS(RETRY_PAUSE_MS));
         begin_drive_toward(g, want);
     } else {
-        ESP_LOGE(TAG, "grp=%d gave up after %d retries (want=%s hall_raw=%d hall_state=%d)",
+        ESP_LOGE(TAG, "grp=%d gave up after %d retries (want=%s hall_raw=%d hall_mv=%d hall_state=%d)",
                  g, MAX_RETRIES,
                  want == PV_MOTOR_TARGET_OPEN   ? "OPEN"
                : want == PV_MOTOR_TARGET_CLOSED ? "CLOSED" : "STOP",
-                 s_hall_raw_last[g], (int)hall);
+                 s_hall_raw_last[g], s_hall_mv_last[g], (int)hall);
         stop_drive(g);
         st->gave_up = true;
     }
@@ -420,13 +418,73 @@ static void motor_task(void *arg)
 
 // ---------- init ----------
 
+static esp_err_t adc_init(void)
+{
+    adc_oneshot_unit_init_cfg_t unit = {
+        .unit_id = ADC_UNIT_1,
+        .clk_src = ADC_RTC_CLK_SRC_DEFAULT,
+        .ulp_mode = ADC_ULP_MODE_DISABLE,
+    };
+    esp_err_t err = adc_oneshot_new_unit(&unit, &s_adc_handle);
+    if (err != ESP_OK) return err;
+
+    adc_cali_line_fitting_config_t cali = {
+        .unit_id = ADC_UNIT_1,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+        .default_vref = 0,
+    };
+    err = adc_cali_create_scheme_line_fitting(&cali, &s_adc_cali);
+    if (err != ESP_OK) goto fail;
+
+    adc_oneshot_chan_cfg_t channel = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    static const adc_channel_t stock_channel_order[] = {
+        ADC_CHANNEL_2,
+        ADC_CHANNEL_1,
+        ADC_CHANNEL_0,
+        ADC_CHANNEL_3,
+        ADC_CHANNEL_7,
+    };
+    for (size_t i = 0; i < sizeof(stock_channel_order) / sizeof(stock_channel_order[0]); ++i) {
+        err = adc_oneshot_config_channel(s_adc_handle, stock_channel_order[i], &channel);
+        if (err != ESP_OK) goto fail;
+    }
+    ESP_LOGI(TAG, "ADC1 line fitting ready (12 dB, 12-bit)");
+    return ESP_OK;
+
+fail:
+    if (s_adc_cali != NULL) {
+        adc_cali_delete_scheme_line_fitting(s_adc_cali);
+        s_adc_cali = NULL;
+    }
+    adc_oneshot_del_unit(s_adc_handle);
+    s_adc_handle = NULL;
+    return err;
+}
+
 esp_err_t pv_motor_init(void)
 {
-    if (s_task != NULL) return ESP_ERR_INVALID_STATE;
+    if (s_task != NULL || s_adc_handle != NULL || s_adc_cali != NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
     memset(s_groups, 0, sizeof(s_groups));
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) return ESP_ERR_NO_MEM;
+
+    // Stock initializes ADC1 and line fitting before LEDC, RMT, WiFi, or MQTT
+    // workers exist. app_main calls pv_motor_init first, so keeping ADC first
+    // inside this function preserves that hardware ordering.
+    esp_err_t err = adc_init();
+    if (err != ESP_OK) {
+        vSemaphoreDelete(s_lock);
+        s_lock = NULL;
+        ESP_LOGE(TAG, "ADC1 calibration init failed: %s", esp_err_to_name(err));
+        return err;
+    }
 
     // LEDC timer + fade — needed even if no motors are currently connected,
     // so we're ready to bring channels online when a vent is plugged in.
@@ -439,19 +497,6 @@ esp_err_t pv_motor_init(void)
     };
     ESP_RETURN_ON_ERROR(ledc_timer_config(&t), TAG, "ledc_timer_config");
     ESP_RETURN_ON_ERROR(ledc_fade_func_install(0), TAG, "ledc_fade_func_install");
-
-    // ADC1 unit + the config-detect channel are always configured; hall
-    // channels come online as groups activate.
-    adc_oneshot_unit_init_cfg_t unit = { .unit_id = ADC_UNIT_1 };
-    ESP_RETURN_ON_ERROR(adc_oneshot_new_unit(&unit, &s_adc_handle), TAG, "adc unit");
-
-    adc_oneshot_chan_cfg_t detect_cfg = {
-        .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten    = ADC_ATTEN_DB_12,
-    };
-    ESP_RETURN_ON_ERROR(
-        adc_oneshot_config_channel(s_adc_handle, PV_ADC_CONFIG_DETECT_CH, &detect_cfg),
-        TAG, "adc detect chan");
 
     // Initial synchronous detect: sample a few times to ride out startup noise.
     int initial = 0;

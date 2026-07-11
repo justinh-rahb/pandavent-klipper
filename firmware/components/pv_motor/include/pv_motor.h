@@ -23,18 +23,17 @@ typedef enum {
 // state 1 = OPEN, fan-off ↔ state 2 = CLOSED chain in the main state machine
 // (FUN_400de55c lines 36-43).
 typedef enum {
-    PV_HALL_INVALID  = 0,        // sensor disconnected / raw ADC == 0
-    PV_HALL_OPEN     = 1,        // at OPEN endpoint   (raw ADC ~640–961)
-    PV_HALL_CLOSED   = 2,        // at CLOSED endpoint (raw ADC ~1360–1680)
-    PV_HALL_MID_LOW  = 3,        // past-closed / over-travel (raw ADC ~2080–2450)
+    PV_HALL_INVALID  = 0,        // sensor disconnected / calibrated value == 0 mV
+    PV_HALL_OPEN     = 1,        // at OPEN endpoint   (640-960 mV inclusive)
+    PV_HALL_CLOSED   = 2,        // at CLOSED endpoint (1360-1680 mV inclusive)
+    PV_HALL_MID_LOW  = 3,        // past-closed / over-travel (2080-2450 mV inclusive)
     PV_HALL_MID_HIGH = 4,        // catch-all — in transit between endpoints
 } pv_motor_hall_t;
 
-// Initialize the LEDC timer + ADC1, sample the config-detect ADC (GPIO 35) to
-// figure out how many motor groups are currently connected, bring those
-// groups online, and spawn the driver task. The task continues to sample the
-// detect ADC once per second and dynamically add/remove groups as vent units
-// are hot-plugged.
+// Initialize ADC1 + line-fitting calibration before LEDC, sample the calibrated
+// config-detect ADC (GPIO 35) to determine the connected motor groups, bring
+// those groups online, and spawn the driver task. The task continues to sample
+// config detect once per second and dynamically add/remove hot-plugged groups.
 esp_err_t pv_motor_init(void);
 
 // Set the target state for one group. group index in [0, active_groups).
