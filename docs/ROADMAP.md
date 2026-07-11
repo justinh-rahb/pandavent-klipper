@@ -52,14 +52,15 @@ Verified against tester OldGuyMeltsPlastic's retail 2-vent kit on
 
 ### Known limitations we're carrying into 0.3.x
 
-- **Hall thresholds** are hard-coded (raw ADC counts). Work for OldGuy's
-  board — unknown whether every board will match. Stock does a per-boot
-  ADC calibration; we don't. See [Phase 3](#phase-3--hall-sensor-calibration-parity).
-- **CLOSED** currently arrives on the mid-travel bump (~2260 raw) rather
-  than the true settled endpoint (~1374 raw). Mechanically OK because the
-  physical hard-stop lands at the same time, but semantically off. Tighten
-  the band once we understand the sensor curve better.
-- **RGB status LEDs** are not driven yet. Deferred beyond 0.3.x.
+- **RGB status LEDs** are not driven yet. Deferred beyond 0.3.x — see
+  [Phase 4](#phase-4--rgb-lighting-deferred). When it lands, WS2812 /
+  RMT init must sequence after `pv_motor_init` to keep the stock ADC
+  ordering invariant intact.
+- ~~Hall thresholds hard-coded in raw counts~~ — fixed in v0.3.3, now
+  uses stock's calibrated mV thresholds. See
+  [Phase 3](#phase-3--hall-sensor-calibration-parity--shipped-in-v033).
+- ~~CLOSED arrives on the mid-travel bump~~ — fixed in v0.3.3 as a
+  side effect of the calibrated bands.
 
 ## Phase 2 — Deeper Moonraker Integration & Auto Logic (v0.3.0)
 
@@ -114,41 +115,56 @@ behavior (the tester's core ask).
       minimum, ideally with a paused / resumed print thrown in
 - [ ] `openvent-diag` capture across a whole print, shared for review
 
-## Phase 3 — Hall Sensor Calibration Parity
+## Phase 3 — Hall Sensor Calibration Parity — ✅ shipped in v0.3.3
 
-Stock does something we don't: per-boot ADC calibration on the hall
-sensors, then interprets thresholds in millivolts rather than raw counts.
-Our first attempt at this in v0.2.4 broke real hardware (LEDs went red,
-device hung) — probably because the calibration pass raced with the
-WS2812 output on the shared ADC/GPIO domain. Reverted in v0.2.5.
+Stock does per-boot line-fitting calibration on ADC1 and interprets
+hall thresholds in millivolts, not raw counts. Our first attempt in
+v0.2.4 broke real hardware (LEDs latched red, device hung after motor
+commands). We reverted in v0.2.5 and shipped raw-count thresholds
+with a wide CLOSED band through the whole 0.3.x line — worked on the
+one tester's board but was per-board fragile.
 
-Not scheduled for a specific release — needs enough Ghidra time to
-understand *what* stock actually does before we try again.
+v0.3.3 restores stock parity behind a Ghidra-verified spec:
 
-- [ ] Re-audit `adc_cali_raw_to_voltage` call sites in the stock binary:
-      when is calibration performed (once at boot? on demand?), which
-      channels are calibrated, and what's the exact scheme (line-fitting
-      vs curve-fitting)
-- [ ] Identify why our v0.2.4 attempt collided with the LED strip: shared
-      RTC/ADC block? contention on GPIO 4/14 (ADC2)?
-- [ ] Document threshold values in millivolts once we can convert
-      OldGuy's captured raw values through the calibration curve
-- [ ] Re-attempt calibration in a way that provably doesn't touch the
-      WS2812 pins during startup
-- [ ] Ship as a firmware-transparent change: user shouldn't need to
-      recalibrate manually, and existing configs should still work
+- [x] Full audit of the stock ADC path: which unit, which scheme,
+      exact config values, channel init order, and boot ordering
+      relative to LEDC / RMT / WiFi. Result: [`docs/adc-calibration-spec.md`](adc-calibration-spec.md)
+- [x] Identified two demonstrable v0.2.4 vs stock differences: LEDC
+      configured before ADC unit/cali (we had it backwards), and
+      `clk_src` / `bitwidth` left at defaults instead of the explicit
+      values stock passes. Root cause of the crash isn't proven from
+      disassembly alone, but restoring both invariants works.
+- [x] Threshold values documented in mV to match stock's inclusive
+      bounds: OPEN 640–960, CLOSED 1360–1680, past-closed 2080–2450.
+      Config-detect bands too (1900–2400 mV → 4 groups,
+      1100–1700 mV → 2 groups, <200 mV → 0)
+- [x] Calibration + channels initialised inside `pv_motor_init` before
+      LEDC or any WS2812 code exists. WS2812 driver doesn't ship yet
+      (Phase 4), but when it lands it must sequence after
+      `pv_motor_init` to preserve the invariant.
+- [x] Firmware-transparent: no user config change needed, existing
+      NVS still valid, arrival debounce and gave-up flag from v0.2.6
+      retained as belt-and-braces
 
-## Phase 4 — RGB Lighting (deferred)
+## Phase 4 — RGB Lighting (planned for 0.4.x)
 
-WS2812 status lighting is the biggest gap vs stock. Out of scope until
-the Moonraker + calibration work has landed and stabilized. Rough sketch
-of what's needed when we do get here:
+WS2812 status lighting is the biggest remaining gap vs stock. Now
+unblocked — Moonraker ingest and hall calibration are stable. Rough
+sketch of what's needed:
 
 - WS2812 RMT driver, strip-count auto-detect via GPIO 35 ADC
 - Simple mode: 7 canned effects with color/brightness/speed sliders
 - Advanced mode: per-state color mapping (six printer states)
 - Warning override (flash red on printer error)
 - "Follow printer" / "Follow exhaust vent" / "Reverse direction" toggles
+
+> **Ordering invariant** — WS2812 GPIOs (4 / 14) are ADC2 CH0 / CH6.
+> Stock initialises ADC1 + line-fitting cali *before* creating any RMT
+> channel; OpenVent's `pv_motor_init` also runs first, and the RGB
+> component when added must be scheduled after it in `app_main`. See
+> [`adc-calibration-spec.md`](adc-calibration-spec.md) §"ADC2 and the
+> WS2812 failure" — this ordering is why v0.2.4 latch-red and hangs
+> stopped happening in v0.3.3.
 
 ## Phase 5 — Extras & Polish
 

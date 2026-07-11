@@ -8,25 +8,21 @@ The Panda Vent is a smart vent riser for enclosed 3D printers. The stock firmwar
 
 ## Features
 
-Working today (v0.2.6):
+Working today (v0.3.3):
 
-- **Automatic vent control** — opens/closes based on print state + bed-temp hysteresis
-- **Captive portal WiFi setup** — same UX as the stock firmware
-- **Moonraker integration** — WebSocket connection to `print_stats` + `heater_bed`
-- **Physical button control** — auto/manual mode toggle, manual vent override
-- **Web configuration UI** — tabbed layout for WiFi, Moonraker, and system
+- **Automatic vent control** — six-state printer model (idle / preparing / printing / paused / complete / error), material-aware policy (PLA opens for cooling, ABS/ASA seals for heat retention), bed-temp hysteresis for residual heat
+- **Stock-parity hall sensing** — per-boot ADC line-fitting calibration with calibrated-millivolt thresholds, matching stock's reproduction contract
+- **Captive portal WiFi setup** — same UX as the stock firmware, show-password toggles, dark mode
+- **Moonraker integration** — WebSocket ingest with `webhooks` / `print_stats` / `virtual_sdcard` / `heater_bed` / `extruder` / optional chamber + `save_variables` (for material), re-subscribes on Klippy restart
+- **Tasmota-compatible power endpoint** — `POWER_ON vent` / `POWER_OFF vent` from any Klipper macro, Mainsail/Fluidd Power-panel toggle for free
+- **Configurable thresholds** — bed OPEN/CLOSE °C editable in the portal, persisted to NVS
+- **Physical button control** — auto/manual mode toggle, manual vent override, manual target persists across reboots
+- **Web configuration UI** — Home / WiFi / Printer / Log / System tabs with live event log
 - **OTA firmware updates** — flash new firmware from the web UI
-
-Coming in the 0.3.x series:
-
-- **Richer Moonraker ingest** — full six-state printer model, live push updates, chamber temp
-- **Material-aware auto mode** — PLA opens for cooling, ABS/ASA seals for heat retention, read from `PRINT_START`
-- **Configurable thresholds** — per-material bed-temp rules editable in the portal
 
 Deferred:
 
-- **Per-boot hall calibration** — stock does this in millivolts; our first attempt broke real hardware. Needs more Ghidra time before we retry
-- **RGB LED status** — WS2812 driver + effects engine, planned for after the Moonraker + calibration work stabilizes
+- **RGB LED status** — WS2812 driver + effects engine, planned for the 0.4.x series
 
 ## Documentation
 
@@ -63,19 +59,28 @@ autodetect doesn't find the right port.)
 
 ## Status
 
-**v0.2.6 is the first stable proof-of-concept release.** 2026-07-10 field
-test on tester OldGuyMeltsPlastic's retail 2-vent kit: 10× consecutive
-open/close cycles, no ESP crash, motor stops cleanly on each arrival.
-See [ROADMAP.md](docs/ROADMAP.md) for what's shipped and what's next.
+**v0.3.3 restores stock ADC calibration parity.** Reverse-engineered
+against the Ghidra decompile of stock v1.0.0 —
+see [`docs/adc-calibration-spec.md`](docs/adc-calibration-spec.md) for
+the reproduction contract. This unblocks per-board hall-sensor accuracy
+without requiring per-board threshold tuning.
 
+Prior milestone: **v0.2.6 was the first stable proof-of-concept release.**
+2026-07-10 field test on tester OldGuyMeltsPlastic's retail 2-vent kit:
+10× consecutive open/close cycles, no ESP crash, motor stops cleanly on
+each arrival.
+
+- ✅ Motors drive both directions and reliably stop at endpoints, using
+  stock-parity mV thresholds and per-boot ADC line-fitting calibration
+- ✅ Six-state printer model + material-aware auto policy, re-subscribes
+  on Klippy restart
 - ✅ Firmware flashes on real Panda Vent hardware; `openvent` script for
   backup / restore / install works end-to-end
 - ✅ WiFi station + AP fallback, mDNS `OpenVent.local`, captive portal
-- ✅ Portal: tabbed UI, live status, WiFi setup, Moonraker config, OTA upload, factory reset, dark mode
-- ✅ Moonraker WebSocket client with `print_stats` + `heater_bed` subscriptions
-- ✅ Motors drive both directions and reliably stop at endpoints
-- ⏳ 0.3.0 in progress: full six-state printer model + material-aware auto
-- ⬜ Deferred: WS2812 RGB, per-boot hall calibration
+- ✅ Portal: tabbed UI (Home / WiFi / Printer / Log / System), live event
+  log, WiFi setup, Moonraker config, OTA upload, factory reset, dark mode
+- ✅ Tasmota-compatible power endpoint for gcode-macro vent control
+- ⬜ Deferred to 0.4.x: WS2812 RGB status lighting
 
 [![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/wildtang3nt)
 

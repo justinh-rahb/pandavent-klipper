@@ -143,19 +143,25 @@ references in stock's binary at `3f42a91c` / `3f42a934`).
 | 3      | past-closed / over-travel      | `mv + (-2080) < 0x173` (~2080–2450 mV) |
 | 4      | in transit (catch-all)         | anything else                    |
 
-> **Note (v0.2.6):** OpenVent uses raw ADC counts with widened bands and a
-> 30 ms arrival debounce, rather than the calibrated-millivolt thresholds
-> stock uses. Initialising `adc_cali_create_scheme_line_fitting` at boot
-> broke real hardware in v0.2.4 — WS2812 strips on GPIO 4 / GPIO 14 latched
-> red and the board hung after repeated motor commands — so we reverted in
-> v0.2.5 and shipped the raw-counts approach in v0.2.6. Reintroducing
-> per-boot calibration is tracked as Phase 3 in the [roadmap](ROADMAP.md);
-> we need to re-audit exactly when and how stock does it before retrying.
-> Field data from v0.2.6 shows CLOSED settles ~1374 raw and OPEN ~640 raw
-> on OldGuy's board, with a non-monotonic peak ~2260 raw mid-travel that
-> the widened CLOSED band tolerates (arrival happens on the peak, but the
-> physical hard-stop lands at the same moment so the vent still closes
-> fully).
+> **Note (v0.3.3):** OpenVent now uses the same calibrated-millivolt
+> thresholds and boot ordering as stock — see
+> [`adc-calibration-spec.md`](adc-calibration-spec.md) for the full
+> reproduction contract. Line-fitting cali handle is created once in
+> `pv_motor_init` with `atten=DB_12`, `bitwidth=12`, `default_vref=0`,
+> and channels 2/1/0/3/7 are configured in that exact order.
+>
+> The v0.2.4 failure (WS2812 latch-red + hang after motor commands) has
+> two demonstrable differences vs stock that we've now corrected: v0.2.4
+> configured LEDC **before** creating the ADC unit and cali handle, and
+> it left `clk_src` / `bitwidth` at their defaults instead of the
+> explicit `ADC_RTC_CLK_SRC_DEFAULT` / `ADC_BITWIDTH_12` stock passes.
+> The stock binary contains no evidence that line-fitting cali itself
+> touches ADC2 or GPIO 4 / 14, so the root cause of the crash isn't
+> proven from disassembly alone — v0.3.3 restores the stock invariants
+> and works, which is the best we can do without a scope. Arrival
+> debounce (`ARRIVED_DEBOUNCE_TICKS=3`, 30 ms of in-band samples) is
+> retained from v0.2.6 as belt-and-braces for boards where the sensor
+> curve is noisier than stock's.
 
 Direction of "OPEN" vs "CLOSED" was derived from the main state machine
 (`FUN_400de55c`, lines 36–43): stock reads the user's fan-on/off intent
