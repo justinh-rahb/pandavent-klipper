@@ -241,6 +241,8 @@ static void merge_status_object(cJSON *status)
     if (state_dirty) recompute_printer_state();
 }
 
+static void send_subscribe(void);
+
 // A complete Moonraker JSON-RPC frame has arrived. Route it.
 static void handle_frame(const char *json, size_t len)
 {
@@ -268,14 +270,41 @@ static void handle_frame(const char *json, size_t len)
         return;
     }
 
-    // notify_status_update: {method:"notify_status_update", params:[{...}, eventtime]}
     cJSON *method = cJSON_GetObjectItemCaseSensitive(root, "method");
-    if (cJSON_IsString(method) && strcmp(method->valuestring, "notify_status_update") == 0) {
-        cJSON *params = cJSON_GetObjectItemCaseSensitive(root, "params");
-        if (cJSON_IsArray(params)) {
-            cJSON *delta = cJSON_GetArrayItem(params, 0);
+    if (cJSON_IsString(method)) {
+        const char *m = method->valuestring;
+
+        // notify_status_update: {method:"notify_status_update", params:[{...}, eventtime]}
+        if (strcmp(m, "notify_status_update") == 0) {
+            cJSON *params = cJSON_GetObjectItemCaseSensitive(root, "params");
+            if (cJSON_IsArray(params)) {
+                cJSON *delta = cJSON_GetArrayItem(params, 0);
+                xSemaphoreTake(s_lock, portMAX_DELAY);
+                merge_status_object(delta);
+                xSemaphoreGive(s_lock);
+            }
+        }
+        // Klippy has just come back after a restart / firmware-restart.
+        // Moonraker preserves subscriptions server-side but does NOT replay
+        // notify_status_update for the state that changed while Klippy was
+        // gone — clients are expected to re-subscribe here to get a fresh
+        // snapshot. Without this, we sit on stale cached data forever after
+        // any Klippy restart.
+        else if (strcmp(m, "notify_klippy_ready") == 0) {
+            ESP_LOGI(TAG, "notify_klippy_ready — re-subscribing");
+            pv_evlog_add("klippy ready; resubscribing");
+            send_subscribe();
+        }
+        // Klippy shutdown / disconnected: our cached print_stats + temps are
+        // stale. Force webhooks.state so the derived printer state flips to
+        // ERROR immediately and pv_policy holds the vent instead of acting
+        // on values that predate the shutdown.
+        else if (strcmp(m, "notify_klippy_shutdown") == 0 ||
+                 strcmp(m, "notify_klippy_disconnected") == 0) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
-            merge_status_object(delta);
+            strncpy(s_wh_state, "shutdown", sizeof(s_wh_state) - 1);
+            s_wh_state[sizeof(s_wh_state) - 1] = '\0';
+            recompute_printer_state();
             xSemaphoreGive(s_lock);
         }
     }
